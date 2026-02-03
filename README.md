@@ -1,178 +1,187 @@
 # Keenetic Router Pro - Home Assistant Integration
 
-[![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
+[![hacs\_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
 [![version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/)
 
-Keenetic router'lar için gelişmiş Home Assistant entegrasyonu. Mesh ağ yönetimi, VPN kontrolü, cihaz takibi ve daha fazlası.
+An advanced Home Assistant integration for Keenetic routers. Provides mesh network management, VPN control, device tracking, and more.
 
-## 🌟 Özellikler
+## 🌟 Features
 
-### 📡 Cihaz Takibi (Device Tracker)
-- **ICMP Ping** ile gerçek zamanlı cihaz durumu
-- Seçilebilir client listesi
-- 5 saniye güncelleme aralığı
-- IP değişikliklerinde otomatik güncelleme
+### 📡 Device Tracking
 
-### 🔗 Mesh Ağ Yönetimi
-- Tüm extender/repeater durumları (binary sensor)
-- Her mesh node için ayrı **reboot butonu**
-- CPU, RAM, uptime bilgileri
-- **Firmware güncelleme bildirimi** (update available sensörü)
-- Bağlı client sayısı (associations)
+* Real-time device status via **ICMP Ping**
+* Selectable client list
+* 5-second update interval
+* Automatic updates on IP address changes
 
-### 🔐 VPN Yönetimi
-- WireGuard profilleri aç/kapat (switch)
-- OpenVPN, IPsec, L2TP, PPTP desteği
-- VPN uptime, RX/TX sensörleri
+### 🔗 Mesh Network Management
 
-### 📶 WiFi Kontrolü
-- Her SSID için aç/kapat switch'i
-- Guest WiFi kontrolü
+* Status of all extenders/repeaters (binary sensors)
+* Separate **reboot button** for each mesh node
+* CPU, RAM, and uptime information
+* **Firmware update notification** (update available sensor)
+* Number of connected clients (associations)
 
-### 🌐 WAN Durumu
-- Gerçek **WAN IP adresi** (PPPoE destekli)
-- Bağlantı durumu sensörü
-- Uptime bilgisi
+### 🔐 VPN Management
 
-### 👥 Client Yönetimi
-- Bağlı / bağlı olmayan cihaz sayısı
-- **Connection Policy seçimi** (per-client)
-  - Default, VPN, No VPN, Smart Home, Roblox, vb.
-  - Deny (internet engelleme)
-- Yeni cihaz bağlandığında **event** tetikleme
+* Enable/disable WireGuard profiles (switch)
+* OpenVPN, IPsec, L2TP, PPTP support
+* VPN uptime, RX/TX sensors
 
-### 🔘 Butonlar
-- Router reboot
-- Mesh node reboot (her biri için ayrı)
+### 📶 WiFi Control
+
+* Enable/disable switch for each SSID
+* Guest WiFi control
+
+### 🌐 WAN Status
+
+* Real **WAN IP address** (PPPoE supported)
+* Connection status sensor
+* Uptime information
+
+### 👥 Client Management
+
+* Number of connected / disconnected devices
+* **Connection Policy selection** (per client)
+
+  * Default, VPN, No VPN, Smart Home, Roblox, etc.
+  * Deny (block internet access)
+* **Event trigger** when a new device connects
+
+### 🔘 Buttons
+
+* Router reboot
+* Mesh node reboot (separate for each node)
 
 ---
 
-## 📦 Kurulum
+## 📦 Installation
 
-### HACS ile (Önerilen)
+### Via HACS (Recommended)
 
 1. HACS > Integrations > ⋮ > Custom repositories
 2. URL: `https://github.com/YOUR_USERNAME/keenetic_router_pro`
 3. Category: Integration
-4. "Keenetic Router Pro" ara ve yükle
-5. Home Assistant'ı yeniden başlat
+4. Search for "Keenetic Router Pro" and install
+5. Restart Home Assistant
 
-### Manuel Kurulum
+### Manual Installation
 
-1. `keenetic_router_pro` klasörünü `config/custom_components/` altına kopyala
-2. Home Assistant'ı yeniden başlat
+1. Copy the `keenetic_router_pro` folder into `config/custom_components/`
+2. Restart Home Assistant
 
 ---
 
-## ⚙️ Yapılandırma
+## ⚙️ Configuration
 
-### 1. Entegrasyonu Ekle
+### 1. Add the Integration
 
 Settings > Devices & Services > Add Integration > **Keenetic Router Pro**
 
-### 2. Bağlantı Bilgileri
+### 2. Connection Details
 
-| Alan | Açıklama | Örnek |
-|------|----------|-------|
-| Host | Router IP adresi | `192.168.1.1` |
-| Port | Web arayüz portu | `80` veya `100` |
-| Username | Admin kullanıcı adı | `admin` |
-| Password | Admin şifresi | `********` |
+| Field    | Description        | Example       |
+| -------- | ------------------ | ------------- |
+| Host     | Router IP address  | `192.168.1.1` |
+| Port     | Web interface port | `80` or `100` |
+| Username | Admin username     | `admin`       |
+| Password | Admin password     | `********`    |
 
-### 3. Takip Edilecek Cihazları Seç
+### 3. Select Devices to Track
 
-Kurulum sırasında hangi cihazların ping ile takip edileceğini seçebilirsin.
+During setup, you can choose which devices should be monitored via ping.
 
 ---
 
-## 📊 Oluşturulan Entity'ler
+## 📊 Created Entities
 
-### Sensörler (Sensors)
+### Sensors
 
-| Entity | Açıklama |
-|--------|----------|
-| `sensor.router_wan_ip` | WAN IP adresi |
-| `sensor.router_wan_status` | WAN durumu (up/down) |
-| `sensor.router_connected_clients` | Bağlı cihaz sayısı |
-| `sensor.router_disconnected_clients` | Bağlı olmayan cihaz sayısı |
-| `sensor.router_extenders` | Mesh extender sayısı |
-| `sensor.mesh_*_firmware` | Mesh node firmware versiyonu |
-| `sensor.wireguard_*_uptime` | VPN uptime |
-| `sensor.wireguard_*_rx` | VPN indirilen veri |
-| `sensor.wireguard_*_tx` | VPN yüklenen veri |
+| Entity                               | Description                    |
+| ------------------------------------ | ------------------------------ |
+| `sensor.router_wan_ip`               | WAN IP address                 |
+| `sensor.router_wan_status`           | WAN status (up/down)           |
+| `sensor.router_connected_clients`    | Number of connected devices    |
+| `sensor.router_disconnected_clients` | Number of disconnected devices |
+| `sensor.router_extenders`            | Number of mesh extenders       |
+| `sensor.mesh_*_firmware`             | Mesh node firmware version     |
+| `sensor.wireguard_*_uptime`          | VPN uptime                     |
+| `sensor.wireguard_*_rx`              | VPN downloaded data            |
+| `sensor.wireguard_*_tx`              | VPN uploaded data              |
 
-### Binary Sensörler
+### Binary Sensors
 
-| Entity | Açıklama |
-|--------|----------|
-| `binary_sensor.mesh_*` | Mesh node bağlantı durumu |
-| `binary_sensor.mesh_*_update_available` | Firmware güncelleme var mı |
+| Entity                                  | Description                 |
+| --------------------------------------- | --------------------------- |
+| `binary_sensor.mesh_*`                  | Mesh node connection status |
+| `binary_sensor.mesh_*_update_available` | Firmware update available   |
 
-### Switch'ler
+### Switches
 
-| Entity | Açıklama |
-|--------|----------|
-| `switch.wifi_*` | WiFi SSID aç/kapat |
-| `switch.wireguard_*` | WireGuard profili aç/kapat |
-| `switch.vpn_*` | VPN tüneli aç/kapat |
+| Entity               | Description                      |
+| -------------------- | -------------------------------- |
+| `switch.wifi_*`      | Enable/disable WiFi SSID         |
+| `switch.wireguard_*` | Enable/disable WireGuard profile |
+| `switch.vpn_*`       | Enable/disable VPN tunnel        |
 
-### Butonlar
+### Buttons
 
-| Entity | Açıklama |
-|--------|----------|
-| `button.router_reboot` | Router'ı yeniden başlat |
-| `button.mesh_reboot_*` | Mesh node'u yeniden başlat |
+| Entity                 | Description        |
+| ---------------------- | ------------------ |
+| `button.router_reboot` | Reboot the router  |
+| `button.mesh_reboot_*` | Reboot a mesh node |
 
-### Select (Seçim)
+### Select
 
-| Entity | Açıklama |
-|--------|----------|
-| `select.*_policy` | Client connection policy seçimi |
+| Entity            | Description                        |
+| ----------------- | ---------------------------------- |
+| `select.*_policy` | Client connection policy selection |
 
 ### Device Tracker
 
-| Entity | Açıklama |
-|--------|----------|
-| `device_tracker.*` | Seçilen cihazların ping durumu |
+| Entity             | Description                     |
+| ------------------ | ------------------------------- |
+| `device_tracker.*` | Ping status of selected devices |
 
 ---
 
-## 🔔 Eventler
+## 🔔 Events
 
 ### `keenetic_router_pro_new_device`
 
-Yeni bir cihaz ağa bağlandığında tetiklenir.
+Triggered when a new device connects to the network.
 
 ```yaml
 automation:
-  - alias: "Yeni Cihaz Bildirimi"
+  - alias: "New Device Notification"
     trigger:
       - platform: event
         event_type: keenetic_router_pro_new_device
     action:
       - service: notify.mobile_app
         data:
-          title: "🆕 Yeni Cihaz Bağlandı"
+          title: "🆕 New Device Connected"
           message: "{{ trigger.event.data.name }} ({{ trigger.event.data.ip }})"
 ```
 
 **Event Data:**
-- `mac`: MAC adresi
-- `name`: Cihaz adı
-- `ip`: IP adresi
-- `hostname`: Hostname
-- `interface`: Bağlı olduğu interface
-- `ssid`: WiFi SSID (varsa)
+
+* `mac`: MAC address
+* `name`: Device name
+* `ip`: IP address
+* `hostname`: Hostname
+* `interface`: Connected interface
+* `ssid`: WiFi SSID (if applicable)
 
 ---
 
-## 📝 Örnek Kullanımlar
+## 📝 Example Usage
 
-### Dashboard Kartı
+### Dashboard Card
 
 ```yaml
 type: entities
-title: Router Durumu
+title: Router Status
 entities:
   - entity: sensor.router_wan_ip
   - entity: sensor.router_connected_clients
@@ -180,11 +189,11 @@ entities:
   - entity: button.router_reboot
 ```
 
-### Mesh Durumu
+### Mesh Status
 
 ```yaml
 type: entities
-title: Mesh Ağı
+title: Mesh Network
 entities:
   - entity: binary_sensor.mesh_workroom_ultra
   - entity: binary_sensor.mesh_garden_buddy
@@ -193,7 +202,7 @@ entities:
   - entity: binary_sensor.mesh_bedroom_air
 ```
 
-### VPN Kontrolü
+### VPN Control
 
 ```yaml
 type: entities
@@ -204,11 +213,11 @@ entities:
   - entity: switch.wireguard_stockholm
 ```
 
-### Çocuk İnternet Kontrolü
+### Parental Internet Control
 
 ```yaml
 type: entities
-title: Çocuk Cihazları
+title: Kids Devices
 entities:
   - entity: select.tablet_policy
   - entity: select.playstation_policy
@@ -217,72 +226,72 @@ entities:
 
 ---
 
-## 🌍 Dil Desteği
+## 🌍 Language Support
 
-- 🇬🇧 English
-- 🇹🇷 Türkçe
-- 🇷🇺 Русский
-
----
-
-## 🔧 Gereksinimler
-
-- Home Assistant 2024.1.0 veya üzeri
-- Keenetic router (NDMS 3.x / 4.x / 5.x)
-- Router'da web yönetim arayüzü aktif olmalı
-
-### Test Edilen Modeller
-
-- Keenetic Ultra (KN-1810)
-- Keenetic Hopper (KN-3810)
-- Keenetic Buddy 5 (KN-3311)
-- Keenetic Air (KN-1610)
+* 🇬🇧 English
+* 🇹🇷 Turkish
+* 🇷🇺 Russian
 
 ---
 
-## 🐛 Sorun Giderme
+## 🔧 Requirements
 
-### Bağlantı Hatası
+* Home Assistant 2024.1.0 or newer
+* Keenetic router (NDMS 3.x / 4.x / 5.x)
+* Web management interface must be enabled on the router
 
-1. Router IP ve port doğru mu kontrol et
-2. Kullanıcı adı/şifre doğru mu kontrol et
-3. Router'da web arayüzü aktif mi kontrol et
+### Tested Models
 
-### Entity'ler Görünmüyor
-
-1. Home Assistant'ı yeniden başlat
-2. Entegrasyonu kaldırıp tekrar ekle
-
-### Ping Çalışmıyor
-
-- Home Assistant'ın ICMP ping için yetkileri olmalı
-- Docker kurulumlarında `network_mode: host` gerekebilir
+* Keenetic Ultra (KN-1810)
+* Keenetic Hopper (KN-3810)
+* Keenetic Buddy 5 (KN-3311)
+* Keenetic Air (KN-1610)
 
 ---
 
-## 📄 Lisans
+## 🐛 Troubleshooting
+
+### Connection Error
+
+1. Verify router IP address and port
+2. Verify username and password
+3. Ensure the web interface is enabled on the router
+
+### Entities Not Appearing
+
+1. Restart Home Assistant
+2. Remove and re-add the integration
+
+### Ping Not Working
+
+* Home Assistant must have permission for ICMP ping
+* Docker installations may require `network_mode: host`
+
+---
+
+## 📄 License
 
 MIT License
 
 ---
 
-## 🤝 Katkıda Bulunma
+## 🤝 Contributing
 
-Pull request'ler memnuniyetle karşılanır!
+Pull requests are welcome!
 
-1. Fork et
-2. Feature branch oluştur (`git checkout -b feature/amazing-feature`)
-3. Commit et (`git commit -m 'Add amazing feature'`)
-4. Push et (`git push origin feature/amazing-feature`)
-5. Pull Request aç
-
----
-
-## 📞 Destek
-
-- [GitHub Issues](https://github.com/YOUR_USERNAME/keenetic_router_pro/issues)
-- [Home Assistant Community](https://community.home-assistant.io/)
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
 ---
 
-**⭐ Beğendiysen yıldız vermeyi unutma!**
+## 📞 Support
+
+* [GitHub Issues](https://github.com/YOUR_USERNAME/keenetic_router_pro/issues)
+* [Home Assistant Community](https://community.home-assistant.io/)
+
+---
+
+**⭐ If you like this project, don’t forget to give it a star!**
