@@ -91,12 +91,60 @@ Think of the firewall as a bouncer with a clipboard. Only invited guests get in.
 
 ---
 
-### 🧠 Summary
+### 🔌 Port Forwarding
 
-* No port forwarding needed for local setups
-* Use firewall rules to limit access to Home Assistant only
-* Prefer VPN over exposed ports
-* Treat router access like root access — carefully
+#### How to Configure Port Forwarding
+1. Enable UPnP if it is not
+2. Go to **Internet > Port forwarding**
+3. Add a new rule:
+
+| Setting       | Value                              |
+| ------------- | ---------------------------------- |
+| Service       | Home Assistant Router API          |
+| Protocol      | TCP                                |
+| External Port | `100`   |
+| Internal IP   | Router LAN IP (e.g. `192.168.1.1`) |
+| Internal Port | `79`                               |
+
+![image1](images/pp.png)
+
+🚫 **Never expose port 80/443 to WAN without firewall rules**
+
+---
+
+### 🛡️ Firewall Rules (Recommended & Safe)
+
+Instead of opening ports globally, use **Firewall rules** to restrict access.
+
+#### Recommended Firewall Setup
+
+1. Go to **Network Rules > Firewall**
+2. Create a new rule:
+
+| Option      | Value                                   |
+| ----------- | --------------------------------------- |
+| Direction   | Input                                   |
+| Source      | Home Assistant IP (e.g. `192.168.1.50`) |
+| Destination | Router                                  |
+| Service     | HTTP / HTTPS / Custom port              |
+| Action      | Allow                                   |
+
+3. Create a second rule:
+
+| Option      | Value        |
+| ----------- | ------------ |
+| Direction   | Input        |
+| Source      | Any          |
+| Destination | Router       |
+| Service     | HTTP / HTTPS |
+| Action      | Deny         |
+
+✅ This ensures **only Home Assistant** can talk to the router API.
+
+![image2](images/fw.png)
+---
+
+### 🔐 Best Security Practices
 
 ---
 
@@ -109,7 +157,7 @@ Settings > Devices & Services > Add Integration > **Keenetic Router Pro**
 | Field    | Description        | Example       |
 | -------- | ------------------ | ------------- |
 | Host     | Router IP address  | `192.168.1.1` |
-| Port     | Web interface port | `80` or `100` |
+| Port     | Web interface port | `100` |
 | Username | Admin username     | `admin`       |
 | Password | Admin password     | `********`    |
 
@@ -260,8 +308,6 @@ entities:
 
 ---
 
-
-
 ## 🔧 Requirements
 
 * Home Assistant 2024.1.0 or newer
@@ -300,25 +346,6 @@ entities:
 ## 📄 License
 
 MIT License
-
----
-
-## 🤝 Contributing
-
-Pull requests are welcome!
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
----
-
-## 📞 Support
-
-* [GitHub Issues](https://github.com/YOUR_USERNAME/keenetic_router_pro/issues)
-* [Home Assistant Community](https://community.home-assistant.io/)
 
 ---
 
