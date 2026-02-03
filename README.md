@@ -9,9 +9,9 @@ An advanced Home Assistant integration for Keenetic routers. Provides mesh netwo
 
 ### 📡 Device Tracking
 
-* Real-time device status via **ICMP Ping.** You don't need to wait for Keenetic's long status update time. Instant tracking!!
+* Real-time device status via **ICMP Ping**
 * Selectable client list
-* 3-second update interval
+* 5-second update interval
 * Automatic updates on IP address changes
 
 ### 🔗 Mesh Network Management
@@ -35,7 +35,7 @@ An advanced Home Assistant integration for Keenetic routers. Provides mesh netwo
 
 ### 🌐 WAN Status
 
-* IP Sensor
+* Real **WAN IP address** (PPPoE supported)
 * Connection status sensor
 * Uptime information
 
@@ -44,7 +44,7 @@ An advanced Home Assistant integration for Keenetic routers. Provides mesh netwo
 * Number of connected / disconnected devices
 * **Connection Policy selection** (per client)
 
-  * Your predefined policies
+  * Default, VPN, No VPN, Smart Home, Roblox, etc.
   * Deny (block internet access)
 * **Event trigger** when a new device connects
 
@@ -74,6 +74,32 @@ An advanced Home Assistant integration for Keenetic routers. Provides mesh netwo
 
 ## ⚙️ Configuration
 
+## 🔒 Security, Firewall & Port Forwarding
+
+To use this integration **securely**, it is strongly recommended to configure **Firewall rules** and **Port Forwarding** properly on your Keenetic router. This section explains *why* it matters and *how* to do it.
+
+### ⚠️ Why Firewall Configuration Is Important
+
+* Home Assistant communicates with the router via its **web management API**
+* Exposing router services directly to the internet **without restrictions** is a security risk
+* Proper firewall rules ensure:
+
+  * Only trusted devices (Home Assistant) can access the router
+  * No unintended WAN access to router management services
+
+Think of the firewall as a bouncer with a clipboard. Only invited guests get in.
+
+---
+
+### 🧠 Summary
+
+* No port forwarding needed for local setups
+* Use firewall rules to limit access to Home Assistant only
+* Prefer VPN over exposed ports
+* Treat router access like root access — carefully
+
+---
+
 ### 1. Add the Integration
 
 Settings > Devices & Services > Add Integration > **Keenetic Router Pro**
@@ -83,7 +109,7 @@ Settings > Devices & Services > Add Integration > **Keenetic Router Pro**
 | Field    | Description        | Example       |
 | -------- | ------------------ | ------------- |
 | Host     | Router IP address  | `192.168.1.1` |
-| Port     | Web interface port | `100` |
+| Port     | Web interface port | `80` or `100` |
 | Username | Admin username     | `admin`       |
 | Password | Admin password     | `********`    |
 
@@ -233,6 +259,8 @@ entities:
 * 🇷🇺 Russian
 
 ---
+
+
 
 ## 🔧 Requirements
 
