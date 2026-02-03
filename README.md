@@ -9,9 +9,9 @@ An advanced Home Assistant integration for Keenetic routers. Provides mesh netwo
 
 ### 📡 Device Tracking
 
-* Real-time device status via **ICMP Ping**
+* Real-time device status via **ICMP Ping.** You don't need to wait for Keenetic's long status update time. Instant tracking!!
 * Selectable client list
-* 5-second update interval
+* 3-second update interval
 * Automatic updates on IP address changes
 
 ### 🔗 Mesh Network Management
@@ -35,7 +35,7 @@ An advanced Home Assistant integration for Keenetic routers. Provides mesh netwo
 
 ### 🌐 WAN Status
 
-* Real **WAN IP address** (PPPoE supported)
+* IP Sensor
 * Connection status sensor
 * Uptime information
 
@@ -44,7 +44,7 @@ An advanced Home Assistant integration for Keenetic routers. Provides mesh netwo
 * Number of connected / disconnected devices
 * **Connection Policy selection** (per client)
 
-  * Default, VPN, No VPN, Smart Home, Roblox, etc.
+  * Your predefined policies
   * Deny (block internet access)
 * **Event trigger** when a new device connects
 
@@ -83,7 +83,7 @@ Settings > Devices & Services > Add Integration > **Keenetic Router Pro**
 | Field    | Description        | Example       |
 | -------- | ------------------ | ------------- |
 | Host     | Router IP address  | `192.168.1.1` |
-| Port     | Web interface port | `80` or `100` |
+| Port     | Web interface port | `100` |
 | Username | Admin username     | `admin`       |
 | Password | Admin password     | `********`    |
 
