@@ -1,7 +1,7 @@
 {
   "domain": "keenetic_router_pro",
   "name": "Keenetic Router Pro",
-  "version": "0.3.0",
+  "version": "1.0.0",
   "documentation": "https://github.com/cataseven/Keenetic-Router-Pro",
   "requirements": ["icmplib>=3.0"],
   "codeowners": ["@cataseven"],
