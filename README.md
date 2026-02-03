@@ -15,7 +15,7 @@ An advanced Home Assistant integration for Keenetic routers. Provides mesh netwo
 
 * Real-time device status via **ICMP Ping**. You don't need to wait Keenetic's update time for device tracking. This integration ping the devices you selected in every 3 seconds.
 * Selectable client list
-* 5-second update interval
+* 3-seconds update interval
 * Automatic updates on IP address changes
 
 ![image3](images/dt.png)
