@@ -4,7 +4,7 @@
 [![version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/)
 
 <a href="https://www.buymeacoffee.com/cataseven" target="_blank">
-  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 60px !important;width: 217px !important;" >
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 60px !important; width: 217px !important;" >
 </a> 
 
 An advanced Home Assistant integration for Keenetic routers. Provides mesh network management, VPN control, device tracking, and more.
