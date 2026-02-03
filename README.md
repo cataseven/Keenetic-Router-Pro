@@ -7,7 +7,7 @@ An advanced Home Assistant integration for Keenetic routers. Provides mesh netwo
 
 ## 🌟 Features
 
-### 📡 Device Tracking
+### 📡 Real Time Device Tracking
 
 * Real-time device status via **ICMP Ping**
 * Selectable client list
