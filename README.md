@@ -3,6 +3,10 @@
 [![hacs\_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
 [![version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/)
 
+<a href="https://www.buymeacoffee.com/cataseven" target="_blank">
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 60px !important;width: 217px !important;" >
+</a> 
+
 An advanced Home Assistant integration for Keenetic routers. Provides mesh network management, VPN control, device tracking, and more.
 
 ## 🌟 Features
@@ -13,6 +17,8 @@ An advanced Home Assistant integration for Keenetic routers. Provides mesh netwo
 * Selectable client list
 * 5-second update interval
 * Automatic updates on IP address changes
+
+![image3](images/dt.png)
 
 ### 🔗 Mesh Network Management
 
@@ -54,6 +60,8 @@ An advanced Home Assistant integration for Keenetic routers. Provides mesh netwo
 * Mesh node reboot (separate for each node)
 
 ---
+
+![image4](images/ctrl.png)  ![image5](images/sensors.png)
 
 ## 📦 Installation
 
@@ -114,7 +122,7 @@ Think of the firewall as a bouncer with a clipboard. Only invited guests get in.
 
 ### 🛡️ Firewall Rules (Recommended & Safe)
 
-Instead of opening ports globally, use **Firewall rules** to restrict access.
+Use **Firewall rules** to restrict access.
 
 #### Recommended Firewall Setup
 
@@ -126,7 +134,7 @@ Instead of opening ports globally, use **Firewall rules** to restrict access.
 | Direction   | Input                                   |
 | Source      | Home Assistant IP (e.g. `192.168.1.50`) |
 | Destination | Router                                  |
-| Service     | HTTP / HTTPS / Custom port              |
+| Service     | Custom port                             |
 | Action      | Allow                                   |
 
 3. Create a second rule:
@@ -136,10 +144,10 @@ Instead of opening ports globally, use **Firewall rules** to restrict access.
 | Direction   | Input        |
 | Source      | Any          |
 | Destination | Router       |
-| Service     | HTTP / HTTPS |
+| Service     | Custom port  |
 | Action      | Deny         |
 
-✅ This ensures **only Home Assistant** can talk to the router API.
+✅ Ensure **only Home Assistant** can talk to the router API.
 
 ![image2](images/fw.png)
 ---
@@ -161,7 +169,7 @@ Settings > Devices & Services > Add Integration > **Keenetic Router Pro**
 | Username | Admin username     | `admin`       |
 | Password | Admin password     | `********`    |
 
-### 3. Select Devices to Track
+### 3. Select Devices for Tracking and Other Device based managements
 
 During setup, you can choose which devices should be monitored via ping.
 
@@ -169,55 +177,6 @@ During setup, you can choose which devices should be monitored via ping.
 
 ## 📊 Created Entities
 
-### Sensors
-
-| Entity                               | Description                    |
-| ------------------------------------ | ------------------------------ |
-| `sensor.router_wan_ip`               | WAN IP address                 |
-| `sensor.router_wan_status`           | WAN status (up/down)           |
-| `sensor.router_connected_clients`    | Number of connected devices    |
-| `sensor.router_disconnected_clients` | Number of disconnected devices |
-| `sensor.router_extenders`            | Number of mesh extenders       |
-| `sensor.mesh_*_firmware`             | Mesh node firmware version     |
-| `sensor.wireguard_*_uptime`          | VPN uptime                     |
-| `sensor.wireguard_*_rx`              | VPN downloaded data            |
-| `sensor.wireguard_*_tx`              | VPN uploaded data              |
-
-### Binary Sensors
-
-| Entity                                  | Description                 |
-| --------------------------------------- | --------------------------- |
-| `binary_sensor.mesh_*`                  | Mesh node connection status |
-| `binary_sensor.mesh_*_update_available` | Firmware update available   |
-
-### Switches
-
-| Entity               | Description                      |
-| -------------------- | -------------------------------- |
-| `switch.wifi_*`      | Enable/disable WiFi SSID         |
-| `switch.wireguard_*` | Enable/disable WireGuard profile |
-| `switch.vpn_*`       | Enable/disable VPN tunnel        |
-
-### Buttons
-
-| Entity                 | Description        |
-| ---------------------- | ------------------ |
-| `button.router_reboot` | Reboot the router  |
-| `button.mesh_reboot_*` | Reboot a mesh node |
-
-### Select
-
-| Entity            | Description                        |
-| ----------------- | ---------------------------------- |
-| `select.*_policy` | Client connection policy selection |
-
-### Device Tracker
-
-| Entity             | Description                     |
-| ------------------ | ------------------------------- |
-| `device_tracker.*` | Ping status of selected devices |
-
----
 
 ## 🔔 Events
 
@@ -248,55 +207,6 @@ automation:
 * `ssid`: WiFi SSID (if applicable)
 
 ---
-
-## 📝 Example Usage
-
-### Dashboard Card
-
-```yaml
-type: entities
-title: Router Status
-entities:
-  - entity: sensor.router_wan_ip
-  - entity: sensor.router_connected_clients
-  - entity: sensor.router_extenders
-  - entity: button.router_reboot
-```
-
-### Mesh Status
-
-```yaml
-type: entities
-title: Mesh Network
-entities:
-  - entity: binary_sensor.mesh_workroom_ultra
-  - entity: binary_sensor.mesh_garden_buddy
-  - entity: binary_sensor.mesh_garage_hopper
-  - entity: binary_sensor.mesh_veranda_air
-  - entity: binary_sensor.mesh_bedroom_air
-```
-
-### VPN Control
-
-```yaml
-type: entities
-title: VPN
-entities:
-  - entity: switch.wireguard_zurich
-  - entity: switch.wireguard_milano
-  - entity: switch.wireguard_stockholm
-```
-
-### Parental Internet Control
-
-```yaml
-type: entities
-title: Kids Devices
-entities:
-  - entity: select.tablet_policy
-  - entity: select.playstation_policy
-  - entity: device_tracker.tablet
-```
 
 ---
 
@@ -348,5 +258,9 @@ entities:
 MIT License
 
 ---
+
+<a href="https://www.buymeacoffee.com/cataseven" target="_blank">
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 60px !important;width: 217px !important;" >
+</a> 
 
 **⭐ If you like this project, don’t forget to give it a star!**
