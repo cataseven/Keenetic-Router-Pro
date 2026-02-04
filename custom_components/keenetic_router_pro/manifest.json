@@ -1,5 +1,5 @@
 {
-  "domain": "keenetic_api",
+  "domain": "keenetic_router_pro",
   "name": "Keenetic Router Pro",
   "codeowners": ["@cataseven"],
   "config_flow": true,
