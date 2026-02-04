@@ -1,13 +1,13 @@
 {
   "domain": "keenetic_api",
   "name": "Keenetic Router Pro",
-  "version": "1.0.0",
-  "dependencies": [],
-  "documentation": "https://github.com/cataseven/Keenetic-Router-Pro",
-  "issue_tracker": "https://github.com/cataseven/Keenetic-Router-Pro/issues",
-  "requirements": ["icmplib>=3.0"],
   "codeowners": ["@cataseven"],
   "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/cataseven/Keenetic-Router-Pro",
   "iot_class": "local_polling",
-  "loggers": ["custom_components.keenetic_api"]
+  "issue_tracker": "https://github.com/cataseven/Keenetic-Router-Pro/issues",
+  "loggers": ["custom_components.keenetic_api"],
+  "requirements": ["icmplib>=3.0"],
+  "version": "1.0.0"
 }
