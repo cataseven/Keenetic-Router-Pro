@@ -150,9 +150,6 @@ Use **Firewall rules** to restrict access.
 ✅ Ensure **only Home Assistant** can talk to the router API.
 
 ![image2](images/fw.png)
----
-
-### 🔐 Best Security Practices
 
 ---
 
