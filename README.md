@@ -82,7 +82,7 @@ An advanced Home Assistant integration for Keenetic routers. Provides mesh netwo
 
 ## ⚙️ Configuration
 
-Web management interface must be enabled on the router
+### Web management interface must be enabled on the router
 
 ## 🔒 Security, Firewall & Port Forwarding
 
