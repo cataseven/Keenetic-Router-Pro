@@ -17,7 +17,7 @@ An advanced Home Assistant integration for Keenetic routers. Provides mesh netwo
 * Selectable client list
 * 3-seconds update interval
 * Automatic updates on IP address changes
-* ⚠️ Apple IOS devices go into Deep Sleep mode so they switch between Home and Away freqeuntly. You need to consider this issue in your automations!! ⚠️
+* ⚠️ Apple IOS devices go into Deep Sleep mode so they switch between Home and Away freqeuntly. You need to consider this issue in your automations!!
 
 ![image3](images/dt.png)
 
