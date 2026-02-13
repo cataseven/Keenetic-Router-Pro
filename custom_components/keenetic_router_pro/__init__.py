@@ -8,7 +8,6 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers import config_validation as cv
 
 from .api import KeeneticClient
 from .const import (
@@ -25,18 +24,17 @@ from .coordinator import KeeneticCoordinator, KeeneticPingCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-# Bu entegrasyon sadece config entry ile kurulabilir
-CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
-
-# Hangi platformlar yüklenecek
 PLATFORMS: list[str] = ["sensor", "switch", "device_tracker", "button", "binary_sensor", "select"]
 
 
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Config entry oluşturulduğunda çalışır."""
     data: dict[str, Any] = dict(entry.data)
 
-    host: str = data.get("host") or data.get("ip")  # yanlış yazılırsa diye fallback
+    host: str = data.get("host") or data.get("ip") 
     username: str = data["username"]
     password: str = data["password"]
     port: int = int(data.get("port", DEFAULT_PORT))
@@ -57,10 +55,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_config_entry_first_refresh()
 
     tracked_clients = data.get(CONF_TRACKED_CLIENTS, [])
-
-    ping_coordinator = KeeneticPingCoordinator(hass, client, tracked_clients)
     
-    # Eğer tracked client varsa ping coordinator'ı başlat
+    ping_coordinator = KeeneticPingCoordinator(hass, client, tracked_clients)
+
     if tracked_clients:
         await ping_coordinator.async_config_entry_first_refresh()
 
@@ -78,7 +75,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         clients = coordinator.data.get("clients", [])
         
         for mac in new_clients:
-            # Client bilgilerini bul
             client_info = None
             for c in clients:
                 if str(c.get("mac") or "").lower() == mac:
