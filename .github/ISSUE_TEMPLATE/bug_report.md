@@ -1,38 +1,52 @@
 ---
 name: Bug report
-about: Create a report to help us improve
-title: ''
-labels: ''
-assignees: ''
+about: Create a report to help us improve the integration
+title: "[BUG] "
+labels: bug
+---
+
+## Configuration & Security Check
+**Before submitting, please confirm you have checked the following:**
+
+- [ ] **1. Web Management:** I confirm that the Web management interface is enabled on the router.
+- [ ] **2. Port Forwarding:** I have configured Port Forwarding properly (e.g., Ext: `100` -> Int: `79`).
+- [ ] **3. Firewall Rules:** I have configured Firewall rules to allow Home Assistant IP and deny others.
 
 ---
 
-**Describe the bug**
-A clear and concise description of what the bug is.
+### 4. Mesh/AP Credentials Check
+For **Mesh Extenders** and **Access Points**, the username and password are the **same as the Main Router**.
+**Are you using the Main Router's credentials?**
+- [ ] Yes
+- [ ] No
 
-**To Reproduce**
+---
+
+## System Information
+- **Router Model:** [e.g. Keenetic Hero DSL, Viva, Giga...]
+- **Keenetic OS Version:** [e.g. 4.1.2]
+
+---
+
+## Describe the bug
+Type your description here...
+
+## To Reproduce
 Steps to reproduce the behavior:
 1. Go to '...'
 2. Click on '....'
 3. Scroll down to '....'
 4. See error
 
-**Expected behavior**
+## Expected behavior
 A clear and concise description of what you expected to happen.
 
-**Screenshots**
-If applicable, add screenshots to help explain your problem.
+## Debug Log
+<details>
+  <summary>Click to expand logs</summary>
 
-**Desktop (please complete the following information):**
- - OS: [e.g. iOS]
- - Browser [e.g. chrome, safari]
- - Version [e.g. 22]
-
-**Smartphone (please complete the following information):**
- - Device: [e.g. iPhone6]
- - OS: [e.g. iOS8.1]
- - Browser [e.g. stock browser, safari]
- - Version [e.g. 22]
-
-**Additional context**
-Add any other context about the problem here.
+  ```yaml
+  logger:
+    default: warning
+    logs:
+      custom_components.keenetic_router_pro: debug
