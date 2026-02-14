@@ -83,13 +83,13 @@ An advanced Home Assistant integration for Keenetic routers. Provides mesh netwo
 
 ## ⚙️ Configuration
 
-### Web management interface must be enabled on the router
+### 1. Web management interface must be enabled on the router
 
-## 🔒 Security, Firewall & Port Forwarding
+## 2. 🔒 Security, Firewall & Port Forwarding
 
 To use this integration **securely**, it is strongly recommended to configure **Firewall rules** and **Port Forwarding** properly on your Keenetic router. This section explains *why* it matters and *how* to do it.
 
-### ⚠️ Why Firewall Configuration Is Important
+### 3. ⚠️ Why Firewall Configuration Is Important
 
 * Home Assistant communicates with the router via its **web management API**
 * Exposing router services directly to the internet **without restrictions** is a security risk
@@ -102,7 +102,7 @@ Think of the firewall as a bouncer with a clipboard. Only invited guests get in.
 
 ---
 
-### 🔌 Port Forwarding
+### 🔌 4. Port Forwarding
 
 #### How to Configure Port Forwarding
 1. Enable UPnP if it is not
@@ -123,7 +123,7 @@ Think of the firewall as a bouncer with a clipboard. Only invited guests get in.
 
 ---
 
-### 🛡️ Firewall Rules (Recommended & Safe)
+### 🛡️ 5. Firewall Rules (Recommended & Safe)
 
 Use **Firewall rules** to restrict access.
 
