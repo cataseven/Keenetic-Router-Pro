@@ -41,19 +41,46 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self) -> dict[str, Any]:
         """Router'dan verileri çek."""
         system = await self.client.async_get_system_info()
+
+        # Interface verisini bir kez çek, tüm metotlara paylaştır
         interfaces = await self.client.async_get_interfaces()
-        wifi = await self.client.async_get_wifi_networks()
-        wireguard = await self.client.async_get_wireguard_status()
-        vpn_tunnels = await self.client.async_get_vpn_tunnels()
+
+        wifi = await self.client.async_get_wifi_networks(interfaces=interfaces)
+        wireguard = await self.client.async_get_wireguard_status(interfaces=interfaces)
+        vpn_tunnels = await self.client.async_get_vpn_tunnels(interfaces=interfaces)
         clients = await self.client.async_get_clients()
         
         # Yeni veriler
-        wan_status = await self.client.async_get_wan_status()
+        wan_status = await self.client.async_get_wan_status(interfaces=interfaces)
         mesh_nodes = await self.client.async_get_mesh_nodes()
-        traffic_stats = await self.client.async_get_traffic_stats()
+        traffic_stats = await self.client.async_get_traffic_stats(interfaces=interfaces)
         client_stats = await self.client.async_get_client_stats()
         host_policies = await self.client.async_get_host_policies()
+
+        # Ana router USB
         usb_storage = await self.client.async_get_usb_storage()
+
+        # Mesh node USB bilgilerini topla
+        # Her member'ın kendi IP'sine doğrudan bağlanıp USB sorgusu yapar
+        mesh_usb: list[dict[str, Any]] = []
+        for node in mesh_nodes:
+            node_ip = node.get("ip")
+            cid = node.get("cid")
+            if not node_ip or not node.get("connected", False):
+                continue
+            node_name = node.get("name") or node.get("mac") or cid or node_ip
+            try:
+                node_usb = await self.client.async_get_mesh_node_usb(
+                    node_ip=node_ip,
+                    node_name=node_name,
+                    node_cid=cid or "",
+                )
+                if node_usb:
+                    for dev in node_usb:
+                        dev["mesh_node_name"] = node_name
+                    mesh_usb.extend(node_usb)
+            except Exception:
+                pass
 
         # Önceki client listesini sakla (yeni cihaz tespiti için)
         previous_clients = self.data.get("clients", []) if self.data else []
@@ -75,6 +102,7 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "client_stats": client_stats,
             "host_policies": host_policies,
             "usb_storage": usb_storage,
+            "mesh_usb": mesh_usb,
             "new_clients": new_macs,  # Yeni bağlanan MAC'ler
         }
 

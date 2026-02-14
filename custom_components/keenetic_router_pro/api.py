@@ -291,14 +291,17 @@ class KeeneticClient:
         return []
 
 
-    async def async_get_wireguard_status(self) -> Dict[str, Any]:
+    async def async_get_wireguard_status(
+        self, interfaces: Dict[str, Any] | None = None
+    ) -> Dict[str, Any]:
         """Return WireGuard interfaces and their status."""
-        info = await self.async_get_interfaces()
-        interfaces = self._normalize_interfaces(info)
+        if interfaces is None:
+            interfaces = await self.async_get_interfaces()
+        iface_list = self._normalize_interfaces(interfaces)
 
         profiles: Dict[str, Any] = {}
 
-        for item in interfaces:
+        for item in iface_list:
             itype = (item.get("type") or "").lower()
             traits = [t.lower() for t in item.get("traits", []) if isinstance(t, str)]
             name = (
@@ -356,14 +359,17 @@ class KeeneticClient:
         return {"profiles": profiles}
 
 
-    async def async_get_wifi_networks(self) -> List[Dict[str, Any]]:
+    async def async_get_wifi_networks(
+        self, interfaces: Dict[str, Any] | None = None
+    ) -> List[Dict[str, Any]]:
 
 
-        info = await self.async_get_interfaces()
-        interfaces = self._normalize_interfaces(info)
+        if interfaces is None:
+            interfaces = await self.async_get_interfaces()
+        iface_list = self._normalize_interfaces(interfaces)
 
         bridge_labels: Dict[str, str] = {}
-        for item in interfaces:
+        for item in iface_list:
             itype = (item.get("type") or "").lower()
             if itype != "bridge":
                 continue
@@ -380,7 +386,7 @@ class KeeneticClient:
             bridge_labels[str(bid)] = str(label)
 
         ap_items: List[Dict[str, Any]] = []
-        for item in interfaces:
+        for item in iface_list:
             raw_id = (
                 item.get("id")
                 or item.get("interface-name")
@@ -547,7 +553,9 @@ class KeeneticClient:
         _LOGGER.warning("Sending router reboot command via RCI parse")
         await self._rci_parse(cmd)
 
-    async def async_get_vpn_tunnels(self) -> dict[str, dict[str, Any]]:
+    async def async_get_vpn_tunnels(
+        self, interfaces: Dict[str, Any] | None = None
+    ) -> dict[str, dict[str, Any]]:
         """Auto-discover VPN-like interfaces (WireGuard, OpenVPN, IPsec, ...).
 
         Returns:
@@ -560,8 +568,9 @@ class KeeneticClient:
               }
             }
         """
-        info = await self.async_get_interfaces()
-        interfaces = self._normalize_interfaces(info)
+        if interfaces is None:
+            interfaces = await self.async_get_interfaces()
+        iface_list = self._normalize_interfaces(interfaces)
 
         VPN_TYPES = {
             "wireguard",
@@ -575,7 +584,7 @@ class KeeneticClient:
 
         profiles: dict[str, dict[str, Any]] = {}
 
-        for item in interfaces:
+        for item in iface_list:
             itype = str(item.get("type") or "").lower()
             if itype not in VPN_TYPES:
                 continue
@@ -611,16 +620,19 @@ class KeeneticClient:
 
         return {"profiles": profiles}
 
-    async def async_get_wan_status(self) -> Dict[str, Any]:
+    async def async_get_wan_status(
+        self, interfaces: Dict[str, Any] | None = None
+    ) -> Dict[str, Any]:
         """Get WAN interface status including external IP address.
         
         PPPoE bağlantısı varsa oradan, yoksa WAN interface'inden IP alır.
         """
-        info = await self.async_get_interfaces()
-        interfaces = self._normalize_interfaces(info)
+        if interfaces is None:
+            interfaces = await self.async_get_interfaces()
+        iface_list = self._normalize_interfaces(interfaces)
 
         # Önce PPPoE ara (öncelikli)
-        for iface in interfaces:
+        for iface in iface_list:
             itype = str(iface.get("type") or "").lower()
             state = str(iface.get("state") or "").lower()
             
@@ -636,7 +648,7 @@ class KeeneticClient:
 
         WAN_KEYWORDS = ("wan", "internet", "isp")
 
-        for iface in interfaces:
+        for iface in iface_list:
             state = str(iface.get("state") or "").lower()
             
             name_fields = [
@@ -764,31 +776,141 @@ class KeeneticClient:
         cmd = f"mws member {cid} reboot"
         await self._rci_parse(cmd)
 
+    async def async_get_mesh_node_usb(
+        self, node_ip: str, node_name: str = "", node_cid: str = ""
+    ) -> List[Dict[str, Any]]:
+        """Get USB storage info directly from a mesh/extender node.
+        
+        Mesh member'lar kendi RCI API'larına sahip ve controller ile
+        aynı credentials'ı paylaşır. Doğrudan member IP'sine bağlanıp
+        POST /rci/system/usb ile USB bilgisini alırız.
+        """
+        devices: List[Dict[str, Any]] = []
+
+        if not self._session or not self._auth_header or not node_ip:
+            return devices
+
+        scheme = "https" if self._ssl else "http"
+        url = f"{scheme}://{node_ip}:{self._port}{RCI_ROOT}/system/usb"
+
+        try:
+            async with async_timeout.timeout(self._request_timeout):
+                resp = await self._session.post(
+                    url,
+                    json={},
+                    headers=self._auth_header,
+                )
+
+            if resp.status == 401:
+                _LOGGER.debug(
+                    "Auth rejected by mesh node %s (%s), "
+                    "member may use different credentials",
+                    node_name, node_ip,
+                )
+                return devices
+
+            if resp.status >= 400:
+                _LOGGER.debug(
+                    "Mesh node %s (%s) USB endpoint returned %s",
+                    node_name, node_ip, resp.status,
+                )
+                return devices
+
+            ctype = resp.headers.get("Content-Type", "")
+            if "application/json" not in ctype:
+                # JSON değilse (text/html vb.) geçersiz yanıt
+                return devices
+
+            data = await resp.json()
+
+            if not data:
+                return devices
+
+            _LOGGER.debug(
+                "Mesh node %s (%s) USB response: %s",
+                node_name, node_ip, data,
+            )
+
+            # Parse - response dict veya list olabilir
+            if isinstance(data, dict):
+                port_list = data.get("port")
+                if isinstance(port_list, list):
+                    for port_info in port_list:
+                        if isinstance(port_info, dict):
+                            dev = self._parse_usb_device(
+                                port_info,
+                                f"mesh_{node_cid or node_ip}_usb",
+                            )
+                            if dev:
+                                dev["mesh_cid"] = node_cid
+                                dev["mesh_node_ip"] = node_ip
+                                devices.append(dev)
+                else:
+                    for usb_id, usb_info in data.items():
+                        if not isinstance(usb_info, dict):
+                            continue
+                        dev = self._parse_usb_device(
+                            usb_info,
+                            f"mesh_{node_cid or node_ip}_{usb_id}",
+                        )
+                        if dev:
+                            dev["mesh_cid"] = node_cid
+                            dev["mesh_node_ip"] = node_ip
+                            devices.append(dev)
+
+            elif isinstance(data, list):
+                for usb_info in data:
+                    if not isinstance(usb_info, dict):
+                        continue
+                    dev = self._parse_usb_device(
+                        usb_info,
+                        f"mesh_{node_cid or node_ip}_usb",
+                    )
+                    if dev:
+                        dev["mesh_cid"] = node_cid
+                        dev["mesh_node_ip"] = node_ip
+                        devices.append(dev)
+
+        except asyncio.TimeoutError:
+            _LOGGER.debug(
+                "Timeout getting USB from mesh node %s (%s)",
+                node_name, node_ip,
+            )
+        except Exception as err:
+            _LOGGER.debug(
+                "Could not get USB from mesh node %s (%s): %s",
+                node_name, node_ip, err,
+            )
+
+        return devices
+
     # -------------------------------------------------------------------------
     # Traffic Statistics
     # -------------------------------------------------------------------------
 
-    async def async_get_traffic_stats(self) -> Dict[str, Any]:
-        """Get traffic statistics (speed, totals)."""
+    async def async_get_traffic_stats(
+        self, interfaces: Dict[str, Any] | None = None
+    ) -> Dict[str, Any]:
+        """Get traffic statistics (speed, totals).
+        
+        Args:
+            interfaces: Pre-fetched interfaces data to avoid duplicate API calls.
+        """
         stats: Dict[str, Any] = {
             "download_speed": 0.0,  
             "upload_speed": 0.0,    
             "total_rx": 0,          
             "total_tx": 0,          
-            "daily_rx": 0,          
-            "daily_tx": 0,          
-            "monthly_rx": 0,        
-            "monthly_tx": 0,        
         }
 
         try:
-            # Interface istatistikleri
-            info = await self.async_get_interfaces()
-            interfaces = self._normalize_interfaces(info)
+            if interfaces is None:
+                interfaces = await self.async_get_interfaces()
+            iface_list = self._normalize_interfaces(interfaces)
 
             WAN_KEYWORDS = ("wan", "internet", "pppoe", "isp")
 
-            for iface in interfaces:
+            for iface in iface_list:
                 name_fields = [
                     iface.get("name"),
                     iface.get("ifname"),
@@ -812,97 +934,98 @@ class KeeneticClient:
                     stats["upload_speed"] = round(float(tx_speed) / 8 / 1024 / 1024, 2)
                     break
 
-            # Günlük/aylık trafik için ek endpoint dene
-            try:
-                traffic_data = await self._rci_get("show/ip/traffic")
-                if traffic_data:
-                    stats["daily_rx"] = traffic_data.get("daily", {}).get("rx") or 0
-                    stats["daily_tx"] = traffic_data.get("daily", {}).get("tx") or 0
-                    stats["monthly_rx"] = traffic_data.get("monthly", {}).get("rx") or 0
-                    stats["monthly_tx"] = traffic_data.get("monthly", {}).get("tx") or 0
-            except Exception:
-                pass
-
         except Exception as err:
             _LOGGER.debug("Error getting traffic stats: %s", err)
 
         return stats
 
     async def async_get_usb_storage(self) -> List[Dict[str, Any]]:
-        """Get USB storage devices information."""
+        """Get USB storage devices information via /rci/system/usb (POST)."""
         devices: List[Dict[str, Any]] = []
-        
+
         try:
-            # Storage bilgilerini al
-            data = await self._rci_get("show/rc/media")
-            
+            # Doğru endpoint: POST /rci/system/usb
+            data = await self._rci_post("system/usb", {})
+
             if not data:
-                data = await self._rci_get("show/media")
-            
+                return devices
+
+            # Yanıt dict ise: {"USB0": {...}, "USB1": {...}} veya {"port": [...]}
             if isinstance(data, dict):
-                for storage_id, storage_info in data.items():
-                    if not isinstance(storage_info, dict):
-                        continue
-                    
-                    # Partition bilgileri
-                    partitions = storage_info.get("partition", {})
-                    
-                    total_size = 0
-                    used_size = 0
-                    free_size = 0
-                    
-                    if isinstance(partitions, dict):
-                        for part_id, part_info in partitions.items():
-                            if isinstance(part_info, dict):
-                                total_size += part_info.get("size", 0)
-                                used_size += part_info.get("used", 0)
-                                free_size += part_info.get("free", part_info.get("available", 0))
-                    elif isinstance(partitions, list):
-                        for part_info in partitions:
-                            if isinstance(part_info, dict):
-                                total_size += part_info.get("size", 0)
-                                used_size += part_info.get("used", 0)
-                                free_size += part_info.get("free", part_info.get("available", 0))
-                    
-                    # Eğer partition bilgisi yoksa, ana bilgileri kullan
-                    if total_size == 0:
-                        total_size = storage_info.get("size", 0)
-                        used_size = storage_info.get("used", 0)
-                        free_size = storage_info.get("free", storage_info.get("available", 0))
-                    
-                    devices.append({
-                        "id": storage_id,
-                        "label": storage_info.get("label") or storage_info.get("name") or storage_id,
-                        "vendor": storage_info.get("vendor"),
-                        "model": storage_info.get("model"),
-                        "serial": storage_info.get("serial"),
-                        "total": total_size,
-                        "used": used_size,
-                        "free": free_size,
-                        "filesystem": storage_info.get("filesystem") or storage_info.get("fs"),
-                        "state": storage_info.get("state"),
-                    })
-            
+                # Port listesi varsa
+                port_list = data.get("port")
+                if isinstance(port_list, list):
+                    for port_info in port_list:
+                        if not isinstance(port_info, dict):
+                            continue
+                        device = self._parse_usb_device(port_info, port_info.get("id") or "usb")
+                        if device:
+                            devices.append(device)
+                else:
+                    # Her key bir USB port/device olabilir
+                    for usb_id, usb_info in data.items():
+                        if not isinstance(usb_info, dict):
+                            continue
+                        device = self._parse_usb_device(usb_info, usb_id)
+                        if device:
+                            devices.append(device)
+
             elif isinstance(data, list):
-                for storage_info in data:
-                    if not isinstance(storage_info, dict):
+                for usb_info in data:
+                    if not isinstance(usb_info, dict):
                         continue
-                    
-                    devices.append({
-                        "id": storage_info.get("id") or storage_info.get("name"),
-                        "label": storage_info.get("label") or storage_info.get("name"),
-                        "vendor": storage_info.get("vendor"),
-                        "model": storage_info.get("model"),
-                        "total": storage_info.get("size", 0),
-                        "used": storage_info.get("used", 0),
-                        "free": storage_info.get("free", storage_info.get("available", 0)),
-                        "state": storage_info.get("state"),
-                    })
+                    device = self._parse_usb_device(usb_info, usb_info.get("id") or "usb")
+                    if device:
+                        devices.append(device)
 
         except Exception as err:
             _LOGGER.debug("Error getting USB storage: %s", err)
 
         return devices
+
+    def _parse_usb_device(self, info: Dict[str, Any], fallback_id: str) -> Dict[str, Any] | None:
+        """Parse a single USB device entry from /rci/system/usb response."""
+        if not info:
+            return None
+
+        # Partition bilgileri
+        partitions = info.get("partition") or info.get("partitions") or {}
+        total_size = 0
+        used_size = 0
+        free_size = 0
+
+        part_items: list = []
+        if isinstance(partitions, dict):
+            part_items = [v for v in partitions.values() if isinstance(v, dict)]
+        elif isinstance(partitions, list):
+            part_items = [v for v in partitions if isinstance(v, dict)]
+
+        for p in part_items:
+            total_size += p.get("size", 0)
+            used_size += p.get("used", 0)
+            free_size += p.get("free", p.get("available", 0))
+
+        # Partition yoksa üst seviye bilgileri kullan
+        if total_size == 0:
+            total_size = info.get("size", 0)
+            used_size = info.get("used", 0)
+            free_size = info.get("free", info.get("available", 0))
+
+        device_id = info.get("id") or info.get("name") or fallback_id
+
+        return {
+            "id": device_id,
+            "label": info.get("label") or info.get("description") or info.get("model") or device_id,
+            "vendor": info.get("vendor") or info.get("manufacturer"),
+            "model": info.get("model") or info.get("product"),
+            "serial": info.get("serial"),
+            "total": total_size,
+            "used": used_size,
+            "free": free_size,
+            "filesystem": info.get("filesystem") or info.get("fs"),
+            "state": info.get("state") or info.get("status"),
+            "type": info.get("type"),
+        }
 
 
     async def async_get_client_stats(self) -> Dict[str, Any]:
@@ -980,7 +1103,8 @@ class KeeneticClient:
             e.g. {"Policy0": "VPN", "Policy1": "Smart Home", ...}
         """
         try:
-            data = await self._rci_get("show/rc/ip/policy")
+            # Doğru endpoint: GET /rci/ip/policy
+            data = await self._rci_get("ip/policy")
             if not data or not isinstance(data, dict):
                 return {}
             
@@ -1003,12 +1127,24 @@ class KeeneticClient:
             e.g. {"aa:bb:cc:dd:ee:ff": {"policy": "Policy1", "access": "permit"}, ...}
         """
         try:
-            data = await self._rci_get("show/rc/ip/hotspot/host")
-            if not data or not isinstance(data, list):
+            # Doğru endpoint: GET /rci/ip/hotspot/host
+            data = await self._rci_get("ip/hotspot/host")
+            if not data:
                 return {}
             
+            # Liste veya dict gelebilir
+            hosts: list = []
+            if isinstance(data, list):
+                hosts = data
+            elif isinstance(data, dict):
+                hosts = data.get("host") or data.get("hosts") or []
+                if isinstance(hosts, dict):
+                    hosts = list(hosts.values())
+            
             host_policies = {}
-            for host in data:
+            for host in hosts:
+                if not isinstance(host, dict):
+                    continue
                 mac = str(host.get("mac") or "").lower()
                 if mac:
                     host_policies[mac] = {

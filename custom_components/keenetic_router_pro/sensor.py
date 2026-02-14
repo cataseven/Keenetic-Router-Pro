@@ -51,6 +51,24 @@ async def async_setup_entry(
         entities.append(KeeneticWgRxSensor(coordinator, entry, name))
         entities.append(KeeneticWgTxSensor(coordinator, entry, name))
 
+    # USB depolama sensörleri (ana router)
+    usb_devices = coordinator.data.get("usb_storage", [])
+    for usb_dev in usb_devices:
+        dev_id = usb_dev.get("id")
+        if dev_id:
+            entities.append(KeeneticUsbStorageSensor(coordinator, entry, dev_id))
+
+    # Mesh node USB sensörleri
+    mesh_usb_devices = coordinator.data.get("mesh_usb", [])
+    for musb_dev in mesh_usb_devices:
+        dev_id = musb_dev.get("id")
+        if dev_id:
+            entities.append(KeeneticMeshUsbStorageSensor(
+                coordinator, entry, dev_id,
+                mesh_node_name=musb_dev.get("mesh_node_name"),
+                mesh_cid=musb_dev.get("mesh_cid"),
+            ))
+
     async_add_entities(entities)
 
 
@@ -757,5 +775,89 @@ class KeeneticMeshFirmwareSensor(BaseKeeneticSensor):
             "current_version": current,
             "available_version": available,
             "update_available": update_available,
+        }
+
+
+class KeeneticMeshUsbStorageSensor(BaseKeeneticSensor):
+    """USB depolama sensörü - Mesh node üzerindeki USB."""
+
+    _attr_translation_key = "mesh_usb_storage"
+    _attr_icon = "mdi:usb-flash-drive"
+
+    def __init__(
+        self,
+        coordinator: KeeneticCoordinator,
+        entry: ConfigEntry,
+        device_id: str,
+        mesh_node_name: str | None = None,
+        mesh_cid: str | None = None,
+    ) -> None:
+        super().__init__(coordinator, entry)
+        self._device_id = device_id
+        self._mesh_node_name = mesh_node_name or "Unknown"
+        self._mesh_cid = mesh_cid
+
+    @property
+    def _device(self) -> dict[str, Any] | None:
+        """Get current device data from mesh USB list."""
+        devices = self.coordinator.data.get("mesh_usb", [])
+        for device in devices:
+            if device.get("id") == self._device_id:
+                return device
+        return None
+
+    @property
+    def unique_id(self) -> str:
+        safe_id = self._device_id.replace("/", "_").replace(" ", "_").lower()
+        safe_cid = (self._mesh_cid or "unknown").replace("-", "")[:12]
+        return f"{self._entry.entry_id}_mesh_{safe_cid}_usb_{safe_id}"
+
+    @property
+    def name(self) -> str:
+        device = self._device
+        if device:
+            label = device.get("label") or device.get("model") or self._device_id
+            return f"USB - {self._mesh_node_name} - {label}"
+        return f"USB - {self._mesh_node_name} - {self._device_id}"
+
+    @property
+    def native_unit_of_measurement(self) -> str:
+        return UnitOfInformation.GIGABYTES
+
+    @property
+    def native_value(self) -> float | None:
+        """Return used space in GB."""
+        device = self._device
+        if device:
+            used = device.get("used", 0)
+            if used:
+                return round(float(used) / (1024 ** 3), 2)
+        return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        device = self._device
+        if not device:
+            return None
+
+        total = device.get("total", 0)
+        used = device.get("used", 0)
+        free = device.get("free", 0)
+
+        percent_used = round((used / total) * 100, 1) if total > 0 else 0
+
+        return {
+            "device_id": self._device_id,
+            "mesh_node": self._mesh_node_name,
+            "mesh_cid": self._mesh_cid,
+            "label": device.get("label"),
+            "vendor": device.get("vendor"),
+            "model": device.get("model"),
+            "filesystem": device.get("filesystem"),
+            "state": device.get("state"),
+            "total_gb": round(float(total) / (1024 ** 3), 2) if total else 0,
+            "used_gb": round(float(used) / (1024 ** 3), 2) if used else 0,
+            "free_gb": round(float(free) / (1024 ** 3), 2) if free else 0,
+            "percent_used": percent_used,
         }
 
