@@ -24,14 +24,13 @@ from .const import DOMAIN, DEFAULT_PORT, DEFAULT_SSL, CONF_TRACKED_CLIENTS
 
 STEP_USER_DATA_SCHEMA = vol.Schema(
     {
-        vol.Required(CONF_HOST): str,
+        vol.Required(CONF_HOST, default="192.168.1.1"): str,
         vol.Optional(CONF_PORT, default=DEFAULT_PORT): int,
-        vol.Required(CONF_USERNAME): str,
+        vol.Required(CONF_USERNAME, default="admin"): str,
         vol.Required(CONF_PASSWORD): str,
         vol.Optional(CONF_SSL, default=DEFAULT_SSL): bool,
     }
 )
-
 
 async def _async_validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     """Router'a bağlanmayı ve temel info çekmeyi dene."""
