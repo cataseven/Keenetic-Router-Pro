@@ -3,7 +3,6 @@ name: Bug report
 about: Create a report to help us improve the integration
 title: "[BUG] "
 labels: bug
-assignees: ''
 
 ---
 
@@ -16,9 +15,9 @@ assignees: ''
 
 ---
 
-### 4. Mesh/AP Credentials Check
+4. Mesh/AP Credentials Check
 For **Mesh Extenders** and **Access Points**, the username and password are the **same as the Main Router**.
-**Are you using the Main Router's credentials?**
+**Are you using the same Main Router's credentials for mesh extenders?**
 - [ ] Yes
 - [ ] No
 
