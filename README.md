@@ -123,7 +123,7 @@ Think of the firewall as a bouncer with a clipboard. Only invited guests get in.
 
 ---
 
-### 4.🛡️Firewall Rules (Recommended & Safe)
+### 5.🛡️Firewall Rules (Recommended & Safe)
 
 Use **Firewall rules** to restrict access.
 
