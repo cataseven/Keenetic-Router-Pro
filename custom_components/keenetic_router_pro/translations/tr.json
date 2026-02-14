@@ -60,7 +60,11 @@
       "ap_client_count": {"name": "AP Cihaz Sayısı"},
       "wireguard_uptime": {"name": "WireGuard Çalışma Süresi"},
       "wireguard_rx": {"name": "WireGuard Alınan"},
-      "wireguard_tx": {"name": "WireGuard Gönderilen"}
+      "wireguard_tx": {"name": "WireGuard Gönderilen"},
+      "usb_storage": {"name": "USB Depolama"},
+      "mesh_usb_storage": {"name": "Mesh USB Depolama"},
+      "mesh_firmware": {"name": "Mesh Firmware"},
+      "extender_count": {"name": "Genişletici Sayısı"}
     },
     "binary_sensor": {
       "mesh_node": {"name": "Mesh Düğümü"}

@@ -60,7 +60,11 @@
       "ap_client_count": {"name": "AP Clients"},
       "wireguard_uptime": {"name": "WireGuard Uptime"},
       "wireguard_rx": {"name": "WireGuard RX"},
-      "wireguard_tx": {"name": "WireGuard TX"}
+      "wireguard_tx": {"name": "WireGuard TX"},
+      "usb_storage": {"name": "USB Storage"},
+      "mesh_usb_storage": {"name": "Mesh USB Storage"},
+      "mesh_firmware": {"name": "Mesh Firmware"},
+      "extender_count": {"name": "Extender Count"}
     },
     "binary_sensor": {
       "mesh_node": {"name": "Mesh Node"}

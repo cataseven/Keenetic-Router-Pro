@@ -60,7 +60,11 @@
       "ap_client_count": {"name": "Устройства на AP"},
       "wireguard_uptime": {"name": "Время работы WireGuard"},
       "wireguard_rx": {"name": "WireGuard получено"},
-      "wireguard_tx": {"name": "WireGuard отправлено"}
+      "wireguard_tx": {"name": "WireGuard отправлено"},
+      "usb_storage": {"name": "USB-хранилище"},
+      "mesh_usb_storage": {"name": "Mesh USB-хранилище"},
+      "mesh_firmware": {"name": "Прошивка Mesh"},
+      "extender_count": {"name": "Количество расширителей"}
     },
     "binary_sensor": {
       "mesh_node": {"name": "Mesh узел"}
