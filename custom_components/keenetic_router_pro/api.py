@@ -940,48 +940,169 @@ class KeeneticClient:
         return stats
 
     async def async_get_usb_storage(self) -> List[Dict[str, Any]]:
-        """Get USB storage devices information via /rci/system/usb (POST)."""
+        """Get USB storage devices information.
+
+        Primary: POST /rci/system/usb
+        Fallback: GET /rci/show/media (+ optional GET /rci/show/usb for extra attrs)
+
+        Some Keenetic firmwares do NOT expose useful data via system/usb, while
+        show/media does. This keeps HA entities alive without log spam.
+        """
         devices: List[Dict[str, Any]] = []
 
+        # 1) Try system/usb first (kept for compatibility)
         try:
-            # Doğru endpoint: POST /rci/system/usb
             data = await self._rci_post("system/usb", {})
+            devices = self._parse_system_usb_response(data)
+        except Exception as err:
+            _LOGGER.debug("system/usb failed: %s", err)
 
-            if not data:
-                return devices
+        # 2) If empty, fallback to show/media (+show/usb)
+        if not devices:
+            try:
+                devices = await self._parse_show_media_usb()
+            except Exception as err:
+                _LOGGER.debug("show/media fallback failed: %s", err)
 
-            # Yanıt dict ise: {"USB0": {...}, "USB1": {...}} veya {"port": [...]}
-            if isinstance(data, dict):
-                # Port listesi varsa
-                port_list = data.get("port")
-                if isinstance(port_list, list):
-                    for port_info in port_list:
-                        if not isinstance(port_info, dict):
-                            continue
-                        device = self._parse_usb_device(port_info, port_info.get("id") or "usb")
-                        if device:
-                            devices.append(device)
-                else:
-                    # Her key bir USB port/device olabilir
-                    for usb_id, usb_info in data.items():
-                        if not isinstance(usb_info, dict):
-                            continue
-                        device = self._parse_usb_device(usb_info, usb_id)
-                        if device:
-                            devices.append(device)
+        return devices
 
-            elif isinstance(data, list):
-                for usb_info in data:
+    def _parse_system_usb_response(self, data: Any) -> List[Dict[str, Any]]:
+        """Parse /rci/system/usb response into a normalized list."""
+        devices: List[Dict[str, Any]] = []
+        if not data:
+            return devices
+
+        # Yanıt dict ise: {"USB0": {...}, "USB1": {...}} veya {"port": [...]}
+        if isinstance(data, dict):
+            port_list = data.get("port")
+            if isinstance(port_list, list):
+                for port_info in port_list:
+                    if not isinstance(port_info, dict):
+                        continue
+                    device = self._parse_usb_device(port_info, port_info.get("id") or "usb")
+                    if device:
+                        devices.append(device)
+            else:
+                for usb_id, usb_info in data.items():
                     if not isinstance(usb_info, dict):
                         continue
-                    device = self._parse_usb_device(usb_info, usb_info.get("id") or "usb")
+                    device = self._parse_usb_device(usb_info, usb_id)
                     if device:
                         devices.append(device)
 
-        except Exception as err:
-            _LOGGER.debug("Error getting USB storage: %s", err)
+        elif isinstance(data, list):
+            for usb_info in data:
+                if not isinstance(usb_info, dict):
+                    continue
+                device = self._parse_usb_device(usb_info, usb_info.get("id") or "usb")
+                if device:
+                    devices.append(device)
 
         return devices
+
+    async def _parse_show_media_usb(self) -> List[Dict[str, Any]]:
+        """Parse USB storage via show/media (and enrich via show/usb when available)."""
+        media_raw = await self._rci_get("show/media")
+        usb_raw = None
+        try:
+            usb_raw = await self._rci_get("show/usb")
+        except Exception:
+            usb_raw = None
+
+        media_map: Dict[str, Dict[str, Any]] = {}
+        if isinstance(media_raw, dict):
+            media_map = {k: v for k, v in media_raw.items() if isinstance(v, dict)}
+
+        usb_map: Dict[str, Dict[str, Any]] = {}
+        if isinstance(usb_raw, dict):
+            device_block = usb_raw.get("device")
+            if isinstance(device_block, dict):
+                usb_map = {k: v for k, v in device_block.items() if isinstance(v, dict)}
+
+        devices: List[Dict[str, Any]] = []
+        for dev_id, info in media_map.items():
+            device = self._parse_show_media_device(dev_id, info, usb_map.get(dev_id))
+            if device:
+                devices.append(device)
+
+        return devices
+
+    def _to_int(self, v: Any, default: int = 0) -> int:
+        """Convert Keenetic numeric fields which may arrive as strings."""
+        if v is None:
+            return default
+        if isinstance(v, bool):
+            return int(v)
+        if isinstance(v, (int, float)):
+            return int(v)
+        try:
+            s = str(v).strip()
+            if s == "":
+                return default
+            # Allow e.g. "30765219840"
+            return int(float(s))
+        except Exception:
+            return default
+
+    def _parse_show_media_device(
+        self,
+        dev_id: str,
+        media_info: Dict[str, Any],
+        usb_info: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any] | None:
+        """Normalize show/media (+show/usb) device into our usb_storage schema."""
+        if not media_info:
+            return None
+
+        # Partitions are usually the best source of size/free
+        partitions = media_info.get("partition") or []
+        part0: Dict[str, Any] | None = None
+        if isinstance(partitions, list) and partitions:
+            p = partitions[0]
+            if isinstance(p, dict):
+                part0 = p
+
+        total = self._to_int((part0 or {}).get("total")) or self._to_int(media_info.get("size"))
+        free = self._to_int((part0 or {}).get("free"))
+        used = max(total - free, 0) if (total and free is not None) else self._to_int((part0 or {}).get("used"))
+
+        filesystem = (part0 or {}).get("fstype") or media_info.get("fstype") or media_info.get("filesystem")
+        label = (part0 or {}).get("label") or media_info.get("label") or media_info.get("product") or dev_id
+
+        # Enrich from show/usb (port, power-control, etc.)
+        port = None
+        power_control = None
+        usb_version = None
+        if isinstance(usb_info, dict):
+            port = usb_info.get("port")
+            power_control = usb_info.get("power-control")
+            usb_version = usb_info.get("usb-version")
+
+        # Media block also has usb {port, version}
+        usb_block = media_info.get("usb")
+        if isinstance(usb_block, dict):
+            port = port or usb_block.get("port")
+            usb_version = usb_version or usb_block.get("version")
+
+        return {
+            "id": dev_id,
+            "label": label,
+            "vendor": media_info.get("manufacturer") or (usb_info or {}).get("manufacturer"),
+            "model": media_info.get("product") or (usb_info or {}).get("product"),
+            "serial": media_info.get("serial") or (usb_info or {}).get("serial"),
+            "total": total,
+            "used": used,
+            "free": free,
+            "filesystem": filesystem,
+            "state": (part0 or {}).get("state") or media_info.get("state"),
+            "type": media_info.get("bus") or "usb",
+            # Extras (kept as attrs, harmless for existing UI)
+            "port": port,
+            "usb_version": usb_version,
+            "ejectable": media_info.get("ejectable"),
+            "power_control": power_control,
+            "uuid": (part0 or {}).get("uuid"),
+        }
 
     def _parse_usb_device(self, info: Dict[str, Any], fallback_id: str) -> Dict[str, Any] | None:
         """Parse a single USB device entry from /rci/system/usb response."""

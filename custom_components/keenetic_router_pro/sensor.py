@@ -672,20 +672,27 @@ class KeeneticUsbStorageSensor(BaseKeeneticSensor):
         device = self._device
         if device:
             label = device.get("label") or device.get("model") or self._device_id
-            return f"USB - {label}"
-        return f"USB - {self._device_id}"
+            return f"USB - {str(label).title()}"
+        return f"USB - {str(self._device_id).title()}"
 
     @property
     def native_unit_of_measurement(self) -> str:
-        return UnitOfInformation.GIGABYTES
+        return PERCENTAGE
 
     @property
     def native_value(self) -> float | None:
-        """Return used space in GB."""
+        """Return used percentage."""
         device = self._device
         if device:
-            used = device.get("used", 0)
-            return round(float(used) / (1024 ** 3), 2)
+            try:
+                total = float(device.get("total", 0) or 0)
+                free = float(device.get("free", 0) or 0)
+            except (TypeError, ValueError):
+                return None
+            if total <= 0:
+                return None
+            used = total - free
+            return round((used / total) * 100.0, 2)
         return None
 
     @property
@@ -706,8 +713,15 @@ class KeeneticUsbStorageSensor(BaseKeeneticSensor):
             "label": device.get("label"),
             "vendor": device.get("vendor"),
             "model": device.get("model"),
+            "serial": device.get("serial"),
             "filesystem": device.get("filesystem"),
             "state": device.get("state"),
+            "type": device.get("type"),
+            "port": device.get("port"),
+            "usb_version": device.get("usb_version"),
+            "ejectable": device.get("ejectable"),
+            "power_control": device.get("power_control"),
+            "uuid": device.get("uuid"),
             "total_gb": round(float(total) / (1024 ** 3), 2),
             "used_gb": round(float(used) / (1024 ** 3), 2),
             "free_gb": round(float(free) / (1024 ** 3), 2),
