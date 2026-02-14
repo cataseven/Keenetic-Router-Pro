@@ -9,5 +9,5 @@
   "issue_tracker": "https://github.com/cataseven/Keenetic-Router-Pro/issues",
   "loggers": ["custom_components.keenetic_api"],
   "requirements": ["icmplib>=3.0"],
-  "version": "1.0.0"
+  "version": "1.0.4"
 }
