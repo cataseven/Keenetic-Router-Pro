@@ -50,6 +50,12 @@ class KeeneticClient:
         self._auth_header: Optional[Dict[str, str]] = None
         self._authenticated: bool = False
 
+        # Mesh/Wi-Fi System (MWS) capability cache:
+        # None  -> unknown (not checked yet)
+        # False -> endpoint missing on this device/firmware (avoid router log spam)
+        # True  -> endpoint works
+        self._mws_member_supported: bool | None = None
+
 
     async def async_start(self, session: aiohttp.ClientSession) -> None:
         """Attach an aiohttp session and authenticate."""
@@ -684,13 +690,41 @@ class KeeneticClient:
 
     async def async_get_mesh_nodes(self) -> List[Dict[str, Any]]:
         """Get mesh/extender nodes status from mws/member endpoint.
-        
+
         Bu endpoint tüm mesh üyelerini detaylı bilgileriyle döndürür.
+
+        NOT:
+        Bazı Keenetic modellerinde/firmware'lerinde Wi-Fi System (MWS) controller yoktur.
+        Bu durumda show/mws/member çağrısı router loguna:
+            Core::Scgi::ThreadPool: not found: "member" (http/rci)
+        şeklinde spam basar.
+
+        Çözüm:
+        1) Önce client listesinde extender/repeater var mı bak.
+           Yoksa MWS endpoint'ine hiç gitme.
+        2) MWS endpoint'i "not found" ise desteklenmiyor diye cache'le, tekrar deneme.
         """
         nodes: List[Dict[str, Any]] = []
 
+        # 1) Önce fallback ile "evde extender var mı?" tespit et
+        try:
+            fallback_nodes = await self._get_mesh_nodes_from_clients()
+        except Exception:
+            fallback_nodes = []
+
+        # Extender yoksa MWS endpoint'ine hiç dokunma (log spam sıfır)
+        if not fallback_nodes:
+            return nodes
+
+        # Daha önce "desteklemiyor" diye cache'lediysek tekrar deneme
+        if self._mws_member_supported is False:
+            return fallback_nodes
+
         try:
             data = await self._rci_get("show/mws/member")
+
+            # Endpoint çalıştı
+            self._mws_member_supported = True
             
             if not data or not isinstance(data, list):
                 return nodes
@@ -730,8 +764,14 @@ class KeeneticClient:
                 })
 
         except Exception as err:
+            # "not found" durumunda tekrar denemeyip cache'leyelim
+            msg = str(err).lower()
+            if ("not found" in msg) or ("404" in msg):
+                self._mws_member_supported = False
+                return fallback_nodes
+
             _LOGGER.debug("Error getting mesh nodes from mws/member: %s", err)
-            return await self._get_mesh_nodes_from_clients()
+            return fallback_nodes
 
         return nodes
 
