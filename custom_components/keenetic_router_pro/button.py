@@ -40,7 +40,7 @@ class KeeneticRebootButton(ButtonEntity):
     """Button to reboot the router."""
 
     _attr_has_entity_name = True
-    _attr_name = "Reboot router"
+    _attr_name = "Reboot Router"
 
     def __init__(
         self,
@@ -108,8 +108,8 @@ class KeeneticMeshRebootButton(ButtonEntity):
         node = self._node
         if node:
             node_name = node.get("name") or node.get("mac") or self._node_cid
-            return f"Mesh - Reboot {node_name}"
-        return f"Mesh - Reboot {self._node_cid}"
+            return f"Reboot {node_name}"
+        return f"Reboot {self._node_cid}"
 
     @property
     def device_info(self) -> dict[str, Any]:
