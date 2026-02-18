@@ -17,7 +17,8 @@ An advanced Home Assistant integration for Keenetic routers. Provides mesh netwo
 * Selectable client list
 * 3-seconds update interval
 * Automatic updates on IP address changes
-* ⚠️ Apple IOS devices go into Deep Sleep mode so they switch between Home and Away freqeuntly. You need to consider this issue in your automations!!
+> [!IMPORTANT]
+> ⚠️ **If Apple IOS devices are registered with client name including 'apple', 'iphone' or 'ipad' then they will NOT be pinged in every 3 seconds. Instead of this, they will sync with status on Router's interface. This is because they go into Deep Sleep mode and disable wifi connection even they are connected to wifi.**
 
 ![image3](images/dt.png)
 
