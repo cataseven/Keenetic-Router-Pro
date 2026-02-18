@@ -59,7 +59,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     ping_coordinator = KeeneticPingCoordinator(hass, client, tracked_clients)
 
     if tracked_clients:
-        await ping_coordinator.async_config_entry_first_refresh()
+        # async_config_entry_first_refresh yerine async_refresh kullanıyoruz.
+        # Ping sırasında CancelledError veya başka bir hata olursa setup
+        # iptal edilmesin; coordinator boş veriyle başlasın, sonraki
+        # döngüde tekrar denensin.
+        try:
+            await ping_coordinator.async_refresh()
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning(
+                "Initial ping refresh failed (non-fatal), will retry on next cycle: %s", err
+            )
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {

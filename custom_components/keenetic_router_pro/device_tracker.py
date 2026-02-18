@@ -152,25 +152,55 @@ class KeeneticClientTracker(CoordinatorEntity, ScannerEntity):
         return SourceType.ROUTER
 
     @property
+    def _is_apple_device(self) -> bool:
+        """Cihaz adı Apple/iPhone/iPad içeriyorsa True döner."""
+        name = self._label or ""
+        name_lower = name.lower()
+        return any(kw in name_lower for kw in ("apple", "iphone", "ipad"))
+
+    @property
     def is_connected(self) -> bool:
-        """Return True if client is considered connected (home) based on ping.
+        """Return True if client is considered connected (home).
         
-        Ping sonucuna göre:
+        Apple/iPhone/iPad cihazları için:
+          link == "up"   -> home
+          link != "up"   -> not_home
+        
+        Diğer cihazlar için:
           ping başarılı  -> home
           ping başarısız -> not_home
         """
-        # Ping coordinator'dan sonucu al
-        ping_results = self._ping_coordinator.data or {}
-        return ping_results.get(self._mac, False)
+        if self._is_apple_device:
+            # Link durumuna göre karar ver
+            client = self._client_from_main
+            if client:
+                return str(client.get("link", "")).lower() == "up"
+            return False
+        else:
+            # Ping coordinator'dan sonucu al
+            ping_results = self._ping_coordinator.data or {}
+            return ping_results.get(self._mac, False)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         client = self._client_from_main
         ping_results = self._ping_coordinator.data or {}
         
+        if self._is_apple_device:
+            client_link = (self._client_from_main or {}).get("link", "unknown")
+            tracking_info: dict[str, Any] = {
+                "tracking_method": "link_state",
+                "link_status": client_link,
+            }
+        else:
+            tracking_info = {
+                "tracking_method": "ping",
+                "ping_status": "reachable" if ping_results.get(self._mac, False) else "unreachable",
+            }
+
         attrs: dict[str, Any] = {
             "label": self._label,
-            "ping_status": "reachable" if ping_results.get(self._mac, False) else "unreachable",
+            **tracking_info,
         }
         
         if not client:

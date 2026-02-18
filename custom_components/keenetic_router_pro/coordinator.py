@@ -226,7 +226,12 @@ class KeeneticPingCoordinator(DataUpdateCoordinator[dict[str, bool]]):
             )
             return False
             
-        except Exception as err:
+        except BaseException as err:
+            # asyncio.CancelledError Python 3.8+'da BaseException'dan türer,
+            # bu yüzden normal Exception bloğu onu yakalamaz.
+            if isinstance(err, asyncio.CancelledError):
+                _LOGGER.debug("Ping to %s was cancelled", ip)
+                return False
             _LOGGER.debug("Ping to %s failed: %s", ip, err)
             return False
 
@@ -258,7 +263,7 @@ class KeeneticPingCoordinator(DataUpdateCoordinator[dict[str, bool]]):
         # Sonuçları MAC adresine göre eşle
         mac_status: dict[str, bool] = {}
         for mac, result in zip(macs, results):
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 _LOGGER.debug("Ping exception for %s: %s", mac, result)
                 mac_status[mac] = False
             else:
