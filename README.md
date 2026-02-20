@@ -131,7 +131,7 @@ Use **Firewall rules** to restrict access.
 #### Recommended Firewall Setup
 
 1. Go to **Network Rules > Firewall**
-2. Create a new rule:
+2. Create a new rule for your **PPPoE** connection:
 
 | Option      | Value                                   |
 | ----------- | --------------------------------------- |
@@ -153,7 +153,7 @@ Use **Firewall rules** to restrict access.
 
 ✅ Ensure **only Home Assistant** can talk to the router API.
 
-![image2](images/fw.png)
+![image2](images/firewall.png)
 
 ---
 
