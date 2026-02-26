@@ -64,7 +64,9 @@
       "usb_storage": {"name": "USB Depolama"},
       "mesh_usb_storage": {"name": "Mesh USB Depolama"},
       "mesh_firmware": {"name": "Mesh Firmware"},
-      "extender_count": {"name": "Genişletici Sayısı"}
+      "extender_count": {"name": "Genişletici Sayısı"},
+      "pppoe_uptime": {"name": "PPPoE Çalışma Süresi"},
+      "active_connections": {"name": "Aktif Bağlantılar"}
     },
     "binary_sensor": {
       "mesh_node": {"name": "Mesh Düğümü"}

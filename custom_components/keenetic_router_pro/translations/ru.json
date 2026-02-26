@@ -64,7 +64,9 @@
       "usb_storage": {"name": "USB-хранилище"},
       "mesh_usb_storage": {"name": "Mesh USB-хранилище"},
       "mesh_firmware": {"name": "Прошивка Mesh"},
-      "extender_count": {"name": "Количество расширителей"}
+      "extender_count": {"name": "Количество расширителей"},
+      "pppoe_uptime": {"name": "Время работы PPPoE"},
+      "active_connections": {"name": "Активные соединения"}
     },
     "binary_sensor": {
       "mesh_node": {"name": "Mesh узел"}

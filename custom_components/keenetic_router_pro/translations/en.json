@@ -64,7 +64,9 @@
       "usb_storage": {"name": "USB Storage"},
       "mesh_usb_storage": {"name": "Mesh USB Storage"},
       "mesh_firmware": {"name": "Mesh Firmware"},
-      "extender_count": {"name": "Extender Count"}
+      "extender_count": {"name": "Extender Count"},
+      "pppoe_uptime": {"name": "PPPoE Uptime"},
+      "active_connections": {"name": "Active Connections"}
     },
     "binary_sensor": {
       "mesh_node": {"name": "Mesh Node"}
