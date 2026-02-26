@@ -475,13 +475,7 @@ class KeeneticPppoeUptimeSensor(BaseKeeneticSensor):
 
     @property
     def native_value(self) -> int:
-        """PPPoE uptime değeri saniye cinsinden.
-
-        wan_status'tan alınır. Bilgi yoksa 0 döner.
-        """
         wan = self.coordinator.data.get("wan_status", {})
-
-        # wan_status zaten PPPoE interface'inden uptime çekiyor
         uptime = wan.get("uptime")
         if uptime in (None, "", "unknown", "Unknown"):
             return 0
@@ -502,7 +496,7 @@ class KeeneticPppoeUptimeSensor(BaseKeeneticSensor):
 
 
 class KeeneticActiveConnectionsSensor(BaseKeeneticSensor):
-    """Aktif NAT/bağlantı sayısı sensörü (conntotal - connfree)."""
+    """Aktif bağlantı sayısı sensörü (conntotal - connfree)."""
 
     _attr_translation_key = "active_connections"
     _attr_icon = "mdi:connection"
@@ -528,13 +522,12 @@ class KeeneticActiveConnectionsSensor(BaseKeeneticSensor):
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         sys = self._system
-        conntotal = 0
-        connfree = 0
         try:
             conntotal = int(sys.get("conntotal", 0))
             connfree = int(sys.get("connfree", 0))
         except (TypeError, ValueError):
-            pass
+            conntotal = 0
+            connfree = 0
         return {
             "total_capacity": conntotal,
             "free": connfree,
