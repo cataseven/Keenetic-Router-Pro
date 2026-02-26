@@ -1,0 +1,82 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Keenetic Router Pro",
+        "description": "Введите данные вашего роутера Keenetic",
+        "data": {
+          "host": "Хост",
+          "port": "Порт",
+          "username": "Имя пользователя",
+          "password": "Пароль",
+          "ssl": "Использовать SSL"
+        }
+      },
+      "select_clients": {
+        "title": "Выберите устройства для отслеживания",
+        "description": "Выберите устройства для отслеживания присутствия. Найдено {client_count} устройств.",
+        "data": {
+          "tracked_clients": "Отслеживаемые устройства"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Неверные учетные данные",
+      "cannot_connect": "Не удается подключиться к роутеру",
+      "unknown": "Произошла неизвестная ошибка"
+    },
+    "abort": {
+      "already_configured": "Устройство уже настроено",
+      "no_clients": "Устройства в сети не найдены"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Настройка отслеживаемых устройств",
+        "description": "Выберите устройства для отслеживания присутствия. Найдено {client_count} устройств.",
+        "data": {
+          "tracked_clients": "Отслеживаемые устройства"
+        }
+      }
+    },
+    "abort": {
+      "no_clients": "Устройства в сети не найдены"
+    }
+  },
+  "entity": {
+    "sensor": {
+      "cpu_load": {"name": "Загрузка CPU"},
+      "memory_usage": {"name": "Использование памяти"},
+      "uptime": {"name": "Время работы"},
+      "wan_status": {"name": "Статус WAN"},
+      "wan_ip": {"name": "WAN IP"},
+      "connected_clients": {"name": "Подключенные устройства"},
+      "disconnected_clients": {"name": "Отключенные устройства"},
+      "download_speed": {"name": "Скорость загрузки"},
+      "upload_speed": {"name": "Скорость отдачи"},
+      "total_download": {"name": "Всего загружено"},
+      "total_upload": {"name": "Всего отдано"},
+      "ap_client_count": {"name": "Устройства на AP"},
+      "wireguard_uptime": {"name": "Время работы WireGuard"},
+      "wireguard_rx": {"name": "WireGuard получено"},
+      "wireguard_tx": {"name": "WireGuard отправлено"},
+      "usb_storage": {"name": "USB-хранилище"},
+      "mesh_usb_storage": {"name": "Mesh USB-хранилище"},
+      "mesh_firmware": {"name": "Прошивка Mesh"},
+      "extender_count": {"name": "Количество расширителей"},
+      "pppoe_uptime": {"name": "Время работы PPPoE"},
+      "active_connections": {"name": "Активные соединения"}
+    },
+    "binary_sensor": {
+      "mesh_node": {"name": "Mesh узел"}
+    },
+    "button": {
+      "reboot": {"name": "Перезагрузить роутер"},
+      "mesh_reboot": {"name": "Перезагрузить Mesh узел"}
+    },
+    "select": {
+      "access_policy": {"name": "Политика доступа"}
+    }
+  }
+}
