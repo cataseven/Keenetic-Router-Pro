@@ -1,0 +1,24 @@
+name: Build and Upload Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sadece klasör içeriğini ziple
+        run: |
+          cd custom_components/keenetic_router_pro
+          zip -r ../../Keenetic-Router-Pro-main.zip .
+
+      - name: Release'e Yükle
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Keenetic-Router-Pro-main.zip
