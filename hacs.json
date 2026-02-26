@@ -1,4 +1,6 @@
 {
   "name": "Keenetic Router Pro",
-  "render_readme": true
+  "filename": "keenetic-router-pro-main.zip",
+  "render_readme": true,
+  "zip_release": true
 }
