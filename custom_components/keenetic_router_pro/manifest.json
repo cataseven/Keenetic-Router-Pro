@@ -1,0 +1,13 @@
+{
+  "domain": "keenetic_router_pro",
+  "name": "Keenetic Router Pro",
+  "codeowners": ["@cataseven"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/cataseven/Keenetic-Router-Pro",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/cataseven/Keenetic-Router-Pro/issues",
+  "loggers": ["custom_components.keenetic_api"],
+  "requirements": ["icmplib>=3.0"],
+  "version": "1.0.0"
+}
