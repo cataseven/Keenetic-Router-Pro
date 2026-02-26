@@ -37,6 +37,8 @@ async def async_setup_entry(
     entities.append(KeeneticConnectedClientsSensor(coordinator, entry))
     entities.append(KeeneticDisconnectedClientsSensor(coordinator, entry))
     entities.append(KeeneticExtenderCountSensor(coordinator, entry))
+    entities.append(KeeneticPppoeUptimeSensor(coordinator, entry))
+    entities.append(KeeneticActiveConnectionsSensor(coordinator, entry))
     
     mesh_nodes = coordinator.data.get("mesh_nodes", [])
     for node in mesh_nodes:
@@ -450,6 +452,93 @@ class KeeneticWanIpSensor(BaseKeeneticSensor):
             "interface": wan.get("interface"),
             "gateway": wan.get("gateway"),
             "status": wan.get("status"),
+        }
+
+
+class KeeneticPppoeUptimeSensor(BaseKeeneticSensor):
+    """PPPoE bağlantı uptime sensörü."""
+
+    _attr_translation_key = "pppoe_uptime"
+    _attr_icon = "mdi:timer-outline"
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._entry.entry_id}_pppoe_uptime"
+
+    @property
+    def name(self) -> str:
+        return "PPPoE Uptime"
+
+    @property
+    def native_unit_of_measurement(self) -> str:
+        return UnitOfTime.SECONDS
+
+    @property
+    def native_value(self) -> int:
+        """PPPoE uptime değeri saniye cinsinden.
+
+        wan_status'tan alınır. Bilgi yoksa 0 döner.
+        """
+        wan = self.coordinator.data.get("wan_status", {})
+
+        # wan_status zaten PPPoE interface'inden uptime çekiyor
+        uptime = wan.get("uptime")
+        if uptime in (None, "", "unknown", "Unknown"):
+            return 0
+        try:
+            return int(float(uptime))
+        except (TypeError, ValueError):
+            return 0
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        wan = self.coordinator.data.get("wan_status", {})
+        return {
+            "interface": wan.get("interface"),
+            "type": wan.get("type"),
+            "status": wan.get("status"),
+            "ip": wan.get("ip"),
+        }
+
+
+class KeeneticActiveConnectionsSensor(BaseKeeneticSensor):
+    """Aktif NAT/bağlantı sayısı sensörü (conntotal - connfree)."""
+
+    _attr_translation_key = "active_connections"
+    _attr_icon = "mdi:connection"
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._entry.entry_id}_active_connections"
+
+    @property
+    def name(self) -> str:
+        return "Active Connections"
+
+    @property
+    def native_value(self) -> int:
+        sys = self._system
+        conntotal = sys.get("conntotal", 0)
+        connfree = sys.get("connfree", 0)
+        try:
+            return int(conntotal) - int(connfree)
+        except (TypeError, ValueError):
+            return 0
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        sys = self._system
+        conntotal = 0
+        connfree = 0
+        try:
+            conntotal = int(sys.get("conntotal", 0))
+            connfree = int(sys.get("connfree", 0))
+        except (TypeError, ValueError):
+            pass
+        return {
+            "total_capacity": conntotal,
+            "free": connfree,
+            "used_percent": round((conntotal - connfree) * 100.0 / conntotal, 1) if conntotal > 0 else 0,
         }
 
 

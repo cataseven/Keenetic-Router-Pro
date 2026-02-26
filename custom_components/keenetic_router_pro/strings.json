@@ -60,7 +60,9 @@
       "ap_client_count": {"name": "AP Clients"},
       "wireguard_uptime": {"name": "WireGuard Uptime"},
       "wireguard_rx": {"name": "WireGuard RX"},
-      "wireguard_tx": {"name": "WireGuard TX"}
+      "wireguard_tx": {"name": "WireGuard TX"},
+      "pppoe_uptime": {"name": "PPPoE Uptime"},
+      "active_connections": {"name": "Active Connections"}
     },
     "binary_sensor": {
       "mesh_node": {"name": "Mesh Node"}
