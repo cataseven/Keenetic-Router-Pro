@@ -16,9 +16,9 @@ jobs:
       - name: Sadece klasör içeriğini ziple
         run: |
           cd custom_components/keenetic_router_pro
-          zip -r ../../Keenetic-Router-Pro-main.zip .
+          zip -r ../../Keenetic-Router-Pro.zip .
 
       - name: Release'e Yükle
         uses: softprops/action-gh-release@v2
         with:
-          files: Keenetic-Router-Pro-main.zip
+          files: Keenetic-Router-Pro.zip
