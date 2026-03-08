@@ -740,7 +740,7 @@ class KeeneticClient:
                 
                 is_connected = (
                     rci_info.get("errors", 0) == 0 
-                    or member.get("internet-available", False)
+                    and member.get("internet-available", False)
                 )
 
                 nodes.append({
