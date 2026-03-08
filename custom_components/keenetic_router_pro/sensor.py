@@ -855,7 +855,7 @@ class KeeneticMeshFirmwareSensor(BaseKeeneticSensor):
 
     @property
     def unique_id(self) -> str:
-        safe_cid = self._node_cid.replace("-", "")[:16]
+        safe_cid = self._node_cid.replace("-", "").replace(":", "")[:16]
         return f"{self._entry.entry_id}_mesh_{safe_cid}_firmware"
 
     @property
@@ -943,7 +943,7 @@ class KeeneticMeshUsbStorageSensor(BaseKeeneticSensor):
     @property
     def unique_id(self) -> str:
         safe_id = self._device_id.replace("/", "_").replace(" ", "_").lower()
-        safe_cid = (self._mesh_cid or "unknown").replace("-", "")[:12]
+        safe_cid = (self._mesh_cid or "unknown").replace("-", "").replace(":", "")[:12]
         return f"{self._entry.entry_id}_mesh_{safe_cid}_usb_{safe_id}"
 
     @property
@@ -1020,7 +1020,7 @@ class KeeneticMeshUptimeSensor(BaseKeeneticSensor):
 
     @property
     def unique_id(self) -> str:
-        safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
+        safe_cid = self._node_cid.replace("-", "").replace(":", "")[:16]
         return f"{self._entry.entry_id}_mesh_{safe_cid}_uptime"
 
     @property
