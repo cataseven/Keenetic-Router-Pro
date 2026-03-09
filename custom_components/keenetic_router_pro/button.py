@@ -72,15 +72,11 @@ class KeeneticMeshRebootButton(MeshEntity, ButtonEntity):
     @property
     def unique_id(self) -> str:
         safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
-        return f"{self._entry_id}_mesh_{safe_cid}_reboot"
+        return f"{safe_cid}_reboot_button"
 
     @property
     def name(self) -> str:
-        node = self._node
-        if node:
-            node_name = node.get("name") or node.get("mac") or self._node_cid
-            return f"Reboot {node_name}"
-        return f"Reboot {self._node_cid}"
+        return "Reboot"
 
     async def async_press(self, **_: Any) -> None:
         await self._client.async_reboot_mesh_node(self._node_cid)

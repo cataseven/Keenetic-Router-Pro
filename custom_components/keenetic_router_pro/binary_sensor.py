@@ -29,7 +29,6 @@ async def async_setup_entry(
         node_cid = node.get("cid") or node.get("id")
         if node_cid:
             entities.append(KeeneticMeshNodeSensor(coordinator, entry, node_cid))
-            entities.append(KeeneticMeshUpdateSensor(coordinator, entry, node_cid))
 
     if entities:
         async_add_entities(entities)
@@ -51,15 +50,11 @@ class KeeneticMeshNodeSensor(MeshEntity, BinarySensorEntity):
     @property
     def unique_id(self) -> str:
         safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
-        return f"{self._entry_id}_mesh_{safe_cid}"
+        return f"{safe_cid}_connect"
 
     @property
     def name(self) -> str:
-        node = self._node
-        if node:
-            node_name = node.get("name") or node.get("mac") or self._node_cid
-            return f"Mesh - {node_name}"
-        return f"Mesh - {self._node_cid}"
+        return f"Connected"
 
     @property
     def is_on(self) -> bool:
@@ -99,59 +94,4 @@ class KeeneticMeshNodeSensor(MeshEntity, BinarySensorEntity):
             "associations": node.get("associations"),
             "rci_errors": node.get("rci_errors"),
         }
-
-
-class KeeneticMeshUpdateSensor(MeshEntity, BinarySensorEntity):
-    """Binary sensor for mesh/extender firmware update availability."""
-    _attr_has_entity_name = True
-    _attr_device_class = BinarySensorDeviceClass.UPDATE
-
-    def __init__(
-        self,
-        coordinator: KeeneticCoordinator,
-        entry: ConfigEntry,
-        node_cid: str,
-    ) -> None:
-        MeshEntity.__init__(self, coordinator, entry.entry_id, entry.title, node_cid)
-
-    @property
-    def unique_id(self) -> str:
-        safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
-        return f"{self._entry_id}_mesh_{safe_cid}_update"
-
-    @property
-    def name(self) -> str:
-        node = self._node
-        if node:
-            node_name = node.get("name") or node.get("mac") or self._node_cid
-            return f"Mesh - {node_name} Update Available"
-        return f"Mesh - {self._node_cid} Update Available"
-
-    @property
-    def is_on(self) -> bool:
-        node = self._node
-        if node:
-            current = node.get("firmware")
-            available = node.get("firmware_available")
-            if current and available and current != available:
-                return True
-        return False
-
-    @property
-    def icon(self) -> str:
-        if self.is_on:
-            return "mdi:update"
-        return "mdi:check-circle"
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
-        node = self._node
-        if not node:
-            return None
-
-        return {
-            "cid": self._node_cid,
-            "model": node.get("model"),
-            "current_version": node.get("firmware"),
-            "available_version": node.get("firmware_available"),
-        }
+    

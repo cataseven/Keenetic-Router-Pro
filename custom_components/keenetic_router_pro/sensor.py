@@ -1,9 +1,19 @@
 """Sensors for Keenetic Router Pro."""
 from __future__ import annotations
 from typing import Any
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import (
+    SensorEntity,
+    SensorDeviceClass,
+    SensorStateClass,
+)
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfInformation, UnitOfTime, PERCENTAGE
+from homeassistant.const import (
+    UnitOfInformation, 
+    UnitOfTime, 
+    PERCENTAGE,
+    UnitOfTemperature,
+    EntityCategory,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import DOMAIN, DATA_COORDINATOR
@@ -34,6 +44,9 @@ async def async_setup_entry(
     entities.append(KeeneticExtenderCountSensor(coordinator, entry))
     entities.append(KeeneticPppoeUptimeSensor(coordinator, entry))
     entities.append(KeeneticActiveConnectionsSensor(coordinator, entry))
+
+    entities.append(KeeneticWifi24TemperatureSensor(coordinator, entry))
+    entities.append(KeeneticWifi5TemperatureSensor(coordinator, entry))
 
     mesh_nodes = coordinator.data.get("mesh_nodes", [])
     for node in mesh_nodes:
@@ -527,7 +540,7 @@ class KeeneticDisconnectedClientsSensor(ControllerEntity, SensorEntity):
     """Bağlı olmayan (bilinen) cihaz sayısı sensörü."""
     _attr_has_entity_name = True
     _attr_translation_key = "disconnected_clients"
-    _attr_icon = "mdi:devices-off"
+    _attr_icon = "mdi:lan-disconnect"
 
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
         ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
@@ -708,7 +721,7 @@ class KeeneticMeshUsbStorageSensor(MeshEntity, SensorEntity):
     def unique_id(self) -> str:
         safe_id = self._device_id.replace("/", "_").replace(" ", "_").lower()
         safe_cid = (self._mesh_cid or "unknown").replace("-", "_").replace(":", "_")[:12]
-        return f"{self._entry_id}_mesh_{safe_cid}_usb_{safe_id}"
+        return f"{safe_cid}_usb_{safe_id}"
 
     @property
     def name(self) -> str:
@@ -771,15 +784,11 @@ class KeeneticMeshUptimeSensor(MeshEntity, SensorEntity):
     @property
     def unique_id(self) -> str:
         safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
-        return f"{self._entry_id}_mesh_{safe_cid}_uptime"
+        return f"{safe_cid}_uptime"
 
     @property
     def name(self) -> str:
-        node = self._node
-        if node:
-            node_name = node.get("name") or node.get("mac") or self._node_cid
-            return f"Mesh - {node_name} Uptime"
-        return f"Mesh - {self._node_cid} Uptime"
+        return f"Uptime"
 
     @property
     def native_unit_of_measurement(self) -> str:
@@ -811,7 +820,7 @@ class KeeneticMeshClientsSensor(MeshEntity, SensorEntity):
     @property
     def unique_id(self) -> str:
         safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
-        return f"{self._entry_id}_mesh_{safe_cid}_clients"
+        return f"{safe_cid}_clients"
 
     @property
     def name(self) -> str:
@@ -846,3 +855,93 @@ class KeeneticMeshClientsSensor(MeshEntity, SensorEntity):
             "model": node.get("model"),
             "mode": node.get("mode"),
         }
+    
+# =============================================================================
+# TEMPERATURE SENSORS
+# =============================================================================
+
+class KeeneticWifi24TemperatureSensor(ControllerEntity, SensorEntity):
+    """WiFi 2.4GHz radio temperature sensor."""
+    _attr_has_entity_name = True
+    _attr_translation_key = "wifi_24_temperature"
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:thermometer"
+
+    def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
+        ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
+        self._band = "2.4GHz"
+        self._interface_prefix = "WifiMaster0"  # Обычно 2.4GHz
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._entry_id}_wifi_24_temperature"
+
+    @property
+    def name(self) -> str:
+        return f"WiFi {self._band} Temperature"
+
+    @property
+    def native_value(self) -> float | None:
+        interfaces = self.coordinator.data.get("interfaces", {}) or {}
+        
+        # Ищем интерфейс по префиксу
+        for iface_id, iface_data in interfaces.items():
+            if iface_id.startswith(self._interface_prefix) and isinstance(iface_data, dict):
+                temp = iface_data.get("temperature")
+                if temp is not None:
+                    try:
+                        return float(temp)
+                    except (TypeError, ValueError):
+                        continue
+        
+        return None
+
+    @property
+    def available(self) -> bool:
+        return self.native_value is not None
+
+
+class KeeneticWifi5TemperatureSensor(ControllerEntity, SensorEntity):
+    """WiFi 5GHz radio temperature sensor."""
+    _attr_has_entity_name = True
+    _attr_translation_key = "wifi_5_temperature"
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:thermometer"
+
+    def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
+        ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
+        self._band = "5GHz"
+        self._interface_prefix = "WifiMaster1"  # Обычно 5GHz
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._entry_id}_wifi_5_temperature"
+
+    @property
+    def name(self) -> str:
+        return f"WiFi {self._band} Temperature"
+
+    @property
+    def native_value(self) -> float | None:
+        interfaces = self.coordinator.data.get("interfaces", {}) or {}
+        
+        for iface_id, iface_data in interfaces.items():
+            if iface_id.startswith(self._interface_prefix) and isinstance(iface_data, dict):
+                temp = iface_data.get("temperature")
+                if temp is not None:
+                    try:
+                        return float(temp)
+                    except (TypeError, ValueError):
+                        continue
+        
+        return None
+
+    @property
+    def available(self) -> bool:
+        return self.native_value is not None
