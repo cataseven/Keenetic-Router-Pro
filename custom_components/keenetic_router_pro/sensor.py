@@ -48,7 +48,6 @@ async def async_setup_entry(
     entities.append(KeeneticWifi24TemperatureSensor(coordinator, entry))
     entities.append(KeeneticWifi5TemperatureSensor(coordinator, entry))
 
-    # === ТРАФИК СЕНСОРЫ ===
     # WiFi 2.4GHz
     entities.append(KeeneticWifi24RxSensor(coordinator, entry))
     entities.append(KeeneticWifi24TxSensor(coordinator, entry))
@@ -873,9 +872,6 @@ class KeeneticMeshClientsSensor(MeshEntity, SensorEntity):
             "mode": node.get("mode"),
         }
     
-# =============================================================================
-# TEMPERATURE SENSORS
-# =============================================================================
 
 class KeeneticWifi24TemperatureSensor(ControllerEntity, SensorEntity):
     """WiFi 2.4GHz radio temperature sensor."""
@@ -963,9 +959,6 @@ class KeeneticWifi5TemperatureSensor(ControllerEntity, SensorEntity):
     def available(self) -> bool:
         return self.native_value is not None
     
-# =============================================================================
-# INTERFACE TRAFFIC SENSORS (из /rci/show/interface/stat)
-# =============================================================================
 
 class KeeneticInterfaceRxSensor(ControllerEntity, SensorEntity):
     """Сенсор входящего трафика для конкретного интерфейса."""

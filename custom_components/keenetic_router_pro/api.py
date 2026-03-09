@@ -930,10 +930,6 @@ class KeeneticClient:
 
         return devices
 
-    # -------------------------------------------------------------------------
-    # Traffic Statistics
-    # -------------------------------------------------------------------------
-
     async def async_get_traffic_stats(
         self, interfaces: Dict[str, Any] | None = None
     ) -> Dict[str, Any]:
@@ -968,9 +964,7 @@ class KeeneticClient:
                 name_joined = " ".join(str(v) for v in name_fields if v).lower()
                 state = str(iface.get("state") or "").lower()
 
-                # Ищем WAN интерфейс
                 if state == "up" and any(k in name_joined for k in WAN_KEYWORDS):
-                    # Traffic counters - пробуем разные ключи
                     stats["total_rx"] = (
                         iface.get("rxbytes") or 
                         iface.get("rx-bytes") or 
@@ -985,9 +979,7 @@ class KeeneticClient:
                         iface.get("tx") or 
                         0
                     )
-                    
-                    # Speed (bits per second -> MB/s)
-                    # Пробуем разные ключи для скорости
+
                     rx_speed = (
                         iface.get("rx-speed") or 
                         iface.get("rxspeed") or 
@@ -1003,7 +995,6 @@ class KeeneticClient:
                         0
                     )
                     
-                    # Конвертация бит/сек -> Мбит/сек
                     stats["download_speed"] = round(float(rx_speed) / 8 / 1024 / 1024, 2)
                     stats["upload_speed"] = round(float(tx_speed) / 8 / 1024 / 1024, 2)
                     
@@ -1469,17 +1460,14 @@ class KeeneticClient:
     async def async_start_firmware_update(self) -> bool:
         """Start firmware update process via /rci/system/update."""
         try:
-            # Команда запуска обновления с подтверждением
             result = await self._rci_post("system/update", {"confirm": True})
             
-            # Успешный ответ обычно содержит статус
             if isinstance(result, dict):
                 status = result.get("status") or result.get("result")
                 if status in ("started", "ok", True, "accepted"):
                     _LOGGER.info("Firmware update started")
                     return True
-            
-            # Некоторые версии возвращают просто 200 без тела
+
             return result is not None
             
         except Exception as err:
