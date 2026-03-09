@@ -1,9 +1,6 @@
 """Binary sensors for Keenetic Router Pro (Mesh AP status)."""
-
 from __future__ import annotations
-
 from typing import Any
-
 from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
     BinarySensorDeviceClass,
@@ -11,10 +8,9 @@ from homeassistant.components.binary_sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
-
 from .const import DOMAIN, DATA_COORDINATOR
 from .coordinator import KeeneticCoordinator
+from .entity import MeshEntity
 
 
 async def async_setup_entry(
@@ -25,7 +21,6 @@ async def async_setup_entry(
     """Set up Keenetic Router Pro binary sensors from a config entry."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: KeeneticCoordinator = data[DATA_COORDINATOR]
-
     entities: list[BinarySensorEntity] = []
 
     # Mesh node'lar için binary sensor
@@ -40,9 +35,8 @@ async def async_setup_entry(
         async_add_entities(entities)
 
 
-class KeeneticMeshNodeSensor(CoordinatorEntity, BinarySensorEntity):
+class KeeneticMeshNodeSensor(MeshEntity, BinarySensorEntity):
     """Binary sensor for mesh/extender node connectivity status."""
-
     _attr_has_entity_name = True
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
 
@@ -52,24 +46,12 @@ class KeeneticMeshNodeSensor(CoordinatorEntity, BinarySensorEntity):
         entry: ConfigEntry,
         node_cid: str,
     ) -> None:
-        super().__init__(coordinator)
-        self._entry = entry
-        self._node_cid = node_cid
-
-    @property
-    def _node(self) -> dict[str, Any] | None:
-        """Get current node data from coordinator."""
-        nodes = self.coordinator.data.get("mesh_nodes", [])
-        for node in nodes:
-            if (node.get("cid") or node.get("id")) == self._node_cid:
-                return node
-        return None
+        MeshEntity.__init__(self, coordinator, entry.entry_id, entry.title, node_cid)
 
     @property
     def unique_id(self) -> str:
-        # CID'den güvenli unique id oluştur
-        safe_cid = self._node_cid.replace("-", "").replace(":", "")[:16]
-        return f"{self._entry.entry_id}_mesh_{safe_cid}"
+        safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
+        return f"{self._entry_id}_mesh_{safe_cid}"
 
     @property
     def name(self) -> str:
@@ -81,7 +63,6 @@ class KeeneticMeshNodeSensor(CoordinatorEntity, BinarySensorEntity):
 
     @property
     def is_on(self) -> bool:
-        """Return True if mesh node is connected."""
         node = self._node
         if node:
             return node.get("connected", False)
@@ -89,7 +70,6 @@ class KeeneticMeshNodeSensor(CoordinatorEntity, BinarySensorEntity):
 
     @property
     def icon(self) -> str:
-        """Return icon based on node mode."""
         node = self._node
         if node:
             mode = node.get("mode", "")
@@ -120,29 +100,9 @@ class KeeneticMeshNodeSensor(CoordinatorEntity, BinarySensorEntity):
             "rci_errors": node.get("rci_errors"),
         }
 
-    @property
-    def device_info(self) -> dict[str, Any]:
-        node = self._node
-        if node:
-            node_name = node.get("name") or node.get("mac") or self._node_cid
-            return {
-                "identifiers": {(DOMAIN, f"mesh_{self._node_cid}")},
-                "name": f"Mesh - {node_name}",
-                "manufacturer": "Keenetic",
-                "model": node.get("model") or "Extender",
-                "via_device": (DOMAIN, self._entry.entry_id),
-            }
-        # Fallback к главному устройству
-        return {
-            "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": self._entry.title,
-            "manufacturer": "Keenetic",
-        }
 
-
-class KeeneticMeshUpdateSensor(CoordinatorEntity, BinarySensorEntity):
+class KeeneticMeshUpdateSensor(MeshEntity, BinarySensorEntity):
     """Binary sensor for mesh/extender firmware update availability."""
-
     _attr_has_entity_name = True
     _attr_device_class = BinarySensorDeviceClass.UPDATE
 
@@ -152,23 +112,12 @@ class KeeneticMeshUpdateSensor(CoordinatorEntity, BinarySensorEntity):
         entry: ConfigEntry,
         node_cid: str,
     ) -> None:
-        super().__init__(coordinator)
-        self._entry = entry
-        self._node_cid = node_cid
-
-    @property
-    def _node(self) -> dict[str, Any] | None:
-        """Get current node data from coordinator."""
-        nodes = self.coordinator.data.get("mesh_nodes", [])
-        for node in nodes:
-            if (node.get("cid") or node.get("id")) == self._node_cid:
-                return node
-        return None
+        MeshEntity.__init__(self, coordinator, entry.entry_id, entry.title, node_cid)
 
     @property
     def unique_id(self) -> str:
-        safe_cid = self._node_cid.replace("-", "").replace(":", "")[:16]
-        return f"{self._entry.entry_id}_mesh_{safe_cid}_update"
+        safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
+        return f"{self._entry_id}_mesh_{safe_cid}_update"
 
     @property
     def name(self) -> str:
@@ -180,7 +129,6 @@ class KeeneticMeshUpdateSensor(CoordinatorEntity, BinarySensorEntity):
 
     @property
     def is_on(self) -> bool:
-        """Return True if firmware update is available."""
         node = self._node
         if node:
             current = node.get("firmware")
@@ -206,22 +154,4 @@ class KeeneticMeshUpdateSensor(CoordinatorEntity, BinarySensorEntity):
             "model": node.get("model"),
             "current_version": node.get("firmware"),
             "available_version": node.get("firmware_available"),
-        }
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        node = self._node
-        if node:
-            node_name = node.get("name") or node.get("mac") or self._node_cid
-            return {
-                "identifiers": {(DOMAIN, f"mesh_{self._node_cid}")},
-                "name": f"Mesh - {node_name}",
-                "manufacturer": "Keenetic",
-                "model": node.get("model") or "Extender",
-                "via_device": (DOMAIN, self._entry.entry_id),
-            }
-        return {
-            "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": self._entry.title,
-            "manufacturer": "Keenetic",
         }

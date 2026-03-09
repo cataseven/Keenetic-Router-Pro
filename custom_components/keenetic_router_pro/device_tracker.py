@@ -1,18 +1,14 @@
 """Device tracker (presence) for Keenetic Router Pro."""
-
 from __future__ import annotations
-
 from typing import Any
-
 from homeassistant.components.device_tracker.config_entry import ScannerEntity
 from homeassistant.components.device_tracker import SourceType
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
-
 from .const import DOMAIN, DATA_COORDINATOR, DATA_PING_COORDINATOR, CONF_TRACKED_CLIENTS
 from .coordinator import KeeneticCoordinator, KeeneticPingCoordinator
+from .entity import ControllerEntity
 
 
 async def async_setup_entry(
@@ -24,14 +20,12 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: KeeneticCoordinator = data[DATA_COORDINATOR]
     ping_coordinator: KeeneticPingCoordinator = data[DATA_PING_COORDINATOR]
-
     entities: list[KeeneticClientTracker] = []
 
     # Sadece config'de belirtilen tracked client'ları ekle
     tracked_clients = entry.data.get(CONF_TRACKED_CLIENTS, [])
-    
+
     if not tracked_clients:
-        # Hiç tracked client yoksa entity ekleme
         return
 
     seen_macs: set[str] = set()
@@ -45,7 +39,6 @@ async def async_setup_entry(
             continue
         seen_macs.add(mac)
 
-        # Kayıtlı ismi al, yoksa MAC kullan
         label = client_info.get("name") or mac.upper()
 
         entities.append(
@@ -63,9 +56,8 @@ async def async_setup_entry(
         async_add_entities(entities)
 
 
-class KeeneticClientTracker(CoordinatorEntity, ScannerEntity):
+class KeeneticClientTracker(ControllerEntity, ScannerEntity):
     """Device tracker entity representing a tracked client."""
-
     _attr_should_poll = False
 
     def __init__(
@@ -77,21 +69,17 @@ class KeeneticClientTracker(CoordinatorEntity, ScannerEntity):
         label: str,
         initial_ip: str | None = None,
     ) -> None:
-        # Ping coordinator'ı ana coordinator olarak kullan
-        super().__init__(ping_coordinator)
+        ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
         self._main_coordinator = coordinator
         self._ping_coordinator = ping_coordinator
-        self._entry = entry
         self._mac = mac.lower()
         self._label = label
         self._initial_ip = initial_ip
         self._attr_name = label
 
     async def async_added_to_hass(self) -> None:
-        """Entity Home Assistant'a eklendiğinde."""
         await super().async_added_to_hass()
         
-        # Ana coordinator'dan da güncellemeleri dinle
         self.async_on_remove(
             self._main_coordinator.async_add_listener(
                 self._handle_coordinator_update
@@ -100,7 +88,6 @@ class KeeneticClientTracker(CoordinatorEntity, ScannerEntity):
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        """Ana coordinator güncellendiğinde IP adresini güncelle."""
         client = self._client_from_main
         if client:
             ip = client.get("ip")
@@ -109,11 +96,9 @@ class KeeneticClientTracker(CoordinatorEntity, ScannerEntity):
         
         self.async_write_ha_state()
 
-    # ---- Core properties ----
-
     @property
     def unique_id(self) -> str:
-        return f"{self._entry.entry_id}_client_{self._mac}"
+        return f"{self._entry_id}_client_{self._mac}"
 
     @property
     def mac_address(self) -> str:
@@ -121,20 +106,16 @@ class KeeneticClientTracker(CoordinatorEntity, ScannerEntity):
 
     @property
     def ip_address(self) -> str | None:
-        """Return current IP address."""
-        # Önce ana coordinator'dan güncel IP'yi al
         client = self._client_from_main
         if client:
             ip = client.get("ip")
             if ip:
                 return str(ip)
         
-        # Yoksa başlangıç IP'sini kullan
         return self._initial_ip
 
     @property
     def hostname(self) -> str | None:
-        """HA'nin de göreceği host adı (label > hostname)."""
         client = self._client_from_main
         if not client:
             return self._label
@@ -153,33 +134,20 @@ class KeeneticClientTracker(CoordinatorEntity, ScannerEntity):
 
     @property
     def _is_apple_device(self) -> bool:
-        """Cihaz adı Apple/iPhone/iPad içeriyorsa True döner."""
         name = self._label or ""
         name_lower = name.lower()
         return any(kw in name_lower for kw in ("apple", "iphone", "ipad"))
 
     @property
     def is_connected(self) -> bool:
-        """Return True if client is considered connected (home).
-        
-        Apple/iPhone/iPad cihazları için:
-          link == "up"   -> home
-          link != "up"   -> not_home
-        
-        Diğer cihazlar için:
-          ping başarılı  -> home
-          ping başarısız -> not_home
-        """
         if self._is_apple_device:
-            # Link durumuna göre karar ver
             client = self._client_from_main
             if client:
                 return str(client.get("link", "")).lower() == "up"
             return False
         else:
-            # Ping coordinator'dan sonucu al
             ping_results = self._ping_coordinator.data or {}
-            return ping_results.get(self._mac, False)
+            return ping_results.get(self._mac, False) 
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
@@ -222,7 +190,6 @@ class KeeneticClientTracker(CoordinatorEntity, ScannerEntity):
             "txrate": client.get("txrate"),
             "access": client.get("access"),
             "priority": client.get("priority"),
-            # debug için
             "active": client.get("active"),
             "link": client.get("link"),
             "last-seen": client.get("last-seen"),
@@ -232,19 +199,7 @@ class KeeneticClientTracker(CoordinatorEntity, ScannerEntity):
         return {k: v for k, v in attrs.items() if v is not None}
 
     @property
-    def device_info(self) -> dict[str, Any]:
-        """Tüm client entity'lerini router device'ı altında grupla."""
-        return {
-            "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": self._entry.title,
-            "manufacturer": "Keenetic",
-        }
-
-    # ---- Helper ----
-
-    @property
     def _client_from_main(self) -> dict[str, Any] | None:
-        """Ana coordinator'dan client bilgisini al."""
         clients = self._main_coordinator.data.get("clients", []) or []
         for item in clients:
             if str(item.get("mac") or "").lower() == self._mac:

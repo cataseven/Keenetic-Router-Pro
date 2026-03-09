@@ -1,18 +1,14 @@
 """Sensors for Keenetic Router Pro."""
-
 from __future__ import annotations
-
 from typing import Any
-
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfInformation, UnitOfTime, PERCENTAGE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
-
 from .const import DOMAIN, DATA_COORDINATOR
 from .coordinator import KeeneticCoordinator
+from .entity import ControllerEntity, MeshEntity
 
 
 async def async_setup_entry(
@@ -23,7 +19,6 @@ async def async_setup_entry(
     """Set up Keenetic Router Pro sensors from a config entry."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: KeeneticCoordinator = data[DATA_COORDINATOR]
-
     entities: list[SensorEntity] = []
 
     # Temel sistem sensörleri
@@ -31,7 +26,7 @@ async def async_setup_entry(
     entities.append(KeeneticMemoryUsageSensor(coordinator, entry))
     entities.append(KeeneticUptimeSensor(coordinator, entry))
     entities.append(KeeneticWanStatusSensor(coordinator, entry))
-    
+
     # Yeni sensörler
     entities.append(KeeneticWanIpSensor(coordinator, entry))
     entities.append(KeeneticConnectedClientsSensor(coordinator, entry))
@@ -39,7 +34,7 @@ async def async_setup_entry(
     entities.append(KeeneticExtenderCountSensor(coordinator, entry))
     entities.append(KeeneticPppoeUptimeSensor(coordinator, entry))
     entities.append(KeeneticActiveConnectionsSensor(coordinator, entry))
-    
+
     mesh_nodes = coordinator.data.get("mesh_nodes", [])
     for node in mesh_nodes:
         node_cid = node.get("cid") or node.get("id")
@@ -76,36 +71,17 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class BaseKeeneticSensor(CoordinatorEntity, SensorEntity):
-    """Base class for Keenetic sensors sharing device_info."""
-
+class KeeneticCpuLoadSensor(ControllerEntity, SensorEntity):
+    """CPU yükü sensörü."""
     _attr_has_entity_name = True
+    _attr_translation_key = "cpu_load"
 
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator)
-        self._entry = entry
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        return {
-            "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": self._entry.title,
-            "manufacturer": "Keenetic",
-        }
-
-    @property
-    def _system(self) -> dict[str, Any]:
-        return self.coordinator.data.get("system", {}) or {}
-
-
-class KeeneticCpuLoadSensor(BaseKeeneticSensor):
-    """CPU yükü sensörü."""
-
-    _attr_translation_key = "cpu_load"
+        ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
 
     @property
     def unique_id(self) -> str:
-        return f"{self._entry.entry_id}_cpu_load"
+        return f"{self._entry_id}_cpu_load"
 
     @property
     def name(self) -> str:
@@ -117,22 +93,28 @@ class KeeneticCpuLoadSensor(BaseKeeneticSensor):
 
     @property
     def native_value(self) -> float | None:
-        # Farklı firmware'lerde farklı key'ler kullanılabiliyor
-        sys = self._system
+        sys = self.coordinator.data.get("system", {}) or {}
         for key in ("cpu_load", "cpuload", "cpu", "cpu-utilization"):
             if key in sys:
                 return float(sys[key])
         return None
 
+    @property
+    def _system(self) -> dict[str, Any]:
+        return self.coordinator.data.get("system", {}) or {}
 
-class KeeneticMemoryUsageSensor(BaseKeeneticSensor):
+
+class KeeneticMemoryUsageSensor(ControllerEntity, SensorEntity):
     """RAM kullanım yüzdesi sensörü."""
-
+    _attr_has_entity_name = True
     _attr_translation_key = "memory_usage"
+
+    def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
+        ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
 
     @property
     def unique_id(self) -> str:
-        return f"{self._entry.entry_id}_mem_usage"
+        return f"{self._entry_id}_mem_usage"
 
     @property
     def name(self) -> str:
@@ -144,13 +126,11 @@ class KeeneticMemoryUsageSensor(BaseKeeneticSensor):
 
     @property
     def native_value(self) -> float | None:
-        sys = self._system
-
+        sys = self.coordinator.data.get("system", {}) or {}
         mem = sys.get("memory") or sys.get("mem")
         memtotal = sys.get("memtotal")
         memfree = sys.get("memfree")
 
-        # 1) "memory": "used/total" string (Keenetic böyle yapıyor)
         if isinstance(mem, str) and "/" in mem:
             try:
                 part_used, part_total = mem.split("/", 1)
@@ -161,12 +141,10 @@ class KeeneticMemoryUsageSensor(BaseKeeneticSensor):
             except (ValueError, TypeError):
                 pass
 
-        # 2) memtotal / memfree ayrı alanlar olarak varsa
         if isinstance(memtotal, (int, float)) and isinstance(memfree, (int, float)) and memtotal > 0:
             used = memtotal - memfree
             return round(used * 100.0 / memtotal, 1)
 
-        # 3) Bazı firmware'lerde doğrudan yüzde dönebiliyor
         for key in ("mem_used_percent", "memory_usage", "memusage"):
             if key in sys:
                 try:
@@ -177,15 +155,17 @@ class KeeneticMemoryUsageSensor(BaseKeeneticSensor):
         return None
 
 
-
-class KeeneticUptimeSensor(BaseKeeneticSensor):
+class KeeneticUptimeSensor(ControllerEntity, SensorEntity):
     """Router uptime sensörü."""
-
+    _attr_has_entity_name = True
     _attr_translation_key = "uptime"
+
+    def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
+        ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
 
     @property
     def unique_id(self) -> str:
-        return f"{self._entry.entry_id}_uptime"
+        return f"{self._entry_id}_uptime"
 
     @property
     def name(self) -> str:
@@ -197,20 +177,13 @@ class KeeneticUptimeSensor(BaseKeeneticSensor):
 
     @property
     def native_value(self) -> int:
-        """Uptime değeri saniye cinsinden.
+        sys = self.coordinator.data.get("system", {}) or {}
+        candidates = []
 
-        Değer yoksa veya parse edilemiyorsa 0 döner (Unknown yerine 0s).
-        """
-        sys = self._system
-
-        candidates: list[Any] = []
-
-        # Bazı firmware'lerde düz root'ta: {"uptime": "12345"}
         for key in ("uptime", "uptime_sec", "uptime_seconds"):
             if key in sys:
                 candidates.append(sys.get(key))
 
-        # Bazı firmware'lerde nested: {"system": {"uptime": "..."}}
         nested = sys.get("system")
         if isinstance(nested, dict):
             for key in ("uptime", "uptime_sec", "uptime_seconds"):
@@ -221,25 +194,24 @@ class KeeneticUptimeSensor(BaseKeeneticSensor):
             if value in (None, "", "unknown", "Unknown"):
                 continue
             try:
-                # string veya float gelebilir
                 return int(float(value))
             except (TypeError, ValueError):
                 continue
 
-        # Hiçbir şey bulunamazsa 0 saniye göster (Unavailable yerine 0s).
         return 0
 
 
-
-
-class KeeneticWanStatusSensor(BaseKeeneticSensor):
+class KeeneticWanStatusSensor(ControllerEntity, SensorEntity):
     """Basit WAN bağlantı durumu sensörü (up/down)."""
-
+    _attr_has_entity_name = True
     _attr_translation_key = "wan_status"
+
+    def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
+        ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
 
     @property
     def unique_id(self) -> str:
-        return f"{self._entry.entry_id}_wan_status"
+        return f"{self._entry_id}_wan_status"
 
     @property
     def name(self) -> str:
@@ -249,7 +221,6 @@ class KeeneticWanStatusSensor(BaseKeeneticSensor):
     def native_value(self) -> str | None:
         interfaces = self.coordinator.data.get("interfaces") or {}
 
-        # interfaces hem dict hem list olabildiği için normalize edelim
         if isinstance(interfaces, dict):
             iface_list = list(interfaces.values())
         elif isinstance(interfaces, list):
@@ -260,13 +231,10 @@ class KeeneticWanStatusSensor(BaseKeeneticSensor):
         if not iface_list:
             return "down"
 
-        # WAN interface'i: state=up ve adında / açıklamasında WAN/Internet/PPPoE/ISP geçen ilk arayüz
         WAN_KEYWORDS = ("wan", "internet", "pppoe", "isp")
 
         for iface in iface_list:
             state = str(iface.get("state") or "").lower()
-
-            # İsim olabilecek tüm alanları toplayıp tek stringte birleştir
             name_fields = [
                 iface.get("name"),
                 iface.get("ifname"),
@@ -283,27 +251,23 @@ class KeeneticWanStatusSensor(BaseKeeneticSensor):
         return "down"
 
 
-class _BaseWgSensor(BaseKeeneticSensor):
+class _BaseWgSensor(ControllerEntity, SensorEntity):
     """WireGuard ortak mantığı."""
-
+    
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry, wg_name: str) -> None:
-        super().__init__(coordinator, entry)
-        # wg_name: interface id (Wireguard0, Wireguard1...)
+        ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
         self._wg_name = wg_name
 
     @property
     def _wg_profiles(self) -> dict[str, Any]:
-        """Return full WireGuard profiles mapping from coordinator data."""
         return self.coordinator.data.get("wireguard", {}).get("profiles", {}) or {}
 
     @property
     def _wg(self) -> dict[str, Any]:
-        """Return this sensor's WireGuard profile data (may be empty)."""
         return self._wg_profiles.get(self._wg_name, {}) or {}
 
     @property
     def _wg_label(self) -> str:
-        """Kullanıcıya gösterilecek tünel adı (label), yoksa id."""
         profile = self._wg
         label = profile.get("label")
         if isinstance(label, str) and label.strip():
@@ -311,19 +275,17 @@ class _BaseWgSensor(BaseKeeneticSensor):
         return self._wg_name
 
 
-
 class KeeneticWgUptimeSensor(_BaseWgSensor):
     """WireGuard tünel uptime sensörü."""
-
+    _attr_has_entity_name = True
     _attr_translation_key = "wireguard_uptime"
 
     @property
     def unique_id(self) -> str:
-        return f"{self._entry.entry_id}_wg_{self._wg_name}_uptime"
+        return f"{self._entry_id}_wg_{self._wg_name}_uptime"
 
     @property
     def name(self) -> str:
-        # Örn: "WireGuard Zurich Uptime"
         return f"WireGuard {self._wg_label} Uptime"
 
     @property
@@ -332,10 +294,6 @@ class KeeneticWgUptimeSensor(_BaseWgSensor):
 
     @property
     def native_value(self) -> int:
-        """Uptime değeri saniye cinsinden.
-
-        Bilgi yoksa veya 'unknown' vs. gelirse 0 döner.
-        """
         for key in ("uptime", "uptime_sec", "uptime_seconds"):
             value = self._wg.get(key)
             if value in (None, "", "unknown", "Unknown"):
@@ -344,78 +302,59 @@ class KeeneticWgUptimeSensor(_BaseWgSensor):
                 return int(float(value))
             except (TypeError, ValueError):
                 continue
-
-        # Tünel kapalıyken / hiç up olmamışken:
         return 0
-
 
 
 class KeeneticWgRxSensor(_BaseWgSensor):
     """WireGuard RX (alınan trafik) sensörü."""
-
+    _attr_has_entity_name = True
     _attr_translation_key = "wireguard_rx"
 
     @property
     def unique_id(self) -> str:
-        return f"{self._entry.entry_id}_wg_{self._wg_name}_rx"
+        return f"{self._entry_id}_wg_{self._wg_name}_rx"
 
     @property
     def name(self) -> str:
-        # Örn: "WireGuard Zurich RX"
         return f"WireGuard {self._wg_label} RX"
-
 
     @property
     def native_unit_of_measurement(self) -> str:
-        # Byte yerine MB göster.
         return UnitOfInformation.MEGABYTES
 
     @property
     def native_value(self) -> float | None:
-        """RX miktarı MB cinsinden.
-
-        Değer yoksa / None ise veya parse edilemiyorsa None döner.
-        """
         for key in ("rxbytes", "rx", "received"):
             value = self._wg.get(key)
             if value in (None, ""):
                 continue
             try:
                 bytes_val = float(value)
-                # 1 MB ~ 1024 * 1024 byte
                 return round(bytes_val / (1024 * 1024), 2)
             except (TypeError, ValueError):
                 continue
         return None
 
 
-
 class KeeneticWgTxSensor(_BaseWgSensor):
     """WireGuard TX (gönderilen trafik) sensörü."""
-
+    _attr_has_entity_name = True
     _attr_translation_key = "wireguard_tx"
 
     @property
     def unique_id(self) -> str:
-        return f"{self._entry.entry_id}_wg_{self._wg_name}_tx"
+        return f"{self._entry_id}_wg_{self._wg_name}_tx"
 
     @property
     def name(self) -> str:
-        # Örn: "WireGuard Zurich TX"
         return f"WireGuard {self._wg_label} TX"
-
 
     @property
     def native_unit_of_measurement(self) -> str:
-        # Byte yerine MB göster.
         return UnitOfInformation.MEGABYTES
 
     @property
     def native_value(self) -> float | None:
-        """TX miktarı MB cinsinden.
-
-        Değer yoksa / None ise veya parse edilemiyorsa None döner.
-        """
         for key in ("txbytes", "tx", "sent"):
             value = self._wg.get(key)
             if value in (None, ""):
@@ -428,15 +367,18 @@ class KeeneticWgTxSensor(_BaseWgSensor):
         return None
 
 
-class KeeneticWanIpSensor(BaseKeeneticSensor):
+class KeeneticWanIpSensor(ControllerEntity, SensorEntity):
     """WAN IP adresi sensörü."""
-
+    _attr_has_entity_name = True
     _attr_translation_key = "wan_ip"
     _attr_icon = "mdi:ip-network"
 
+    def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
+        ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
+
     @property
     def unique_id(self) -> str:
-        return f"{self._entry.entry_id}_wan_ip"
+        return f"{self._entry_id}_wan_ip"
 
     @property
     def name(self) -> str:
@@ -457,15 +399,18 @@ class KeeneticWanIpSensor(BaseKeeneticSensor):
         }
 
 
-class KeeneticPppoeUptimeSensor(BaseKeeneticSensor):
+class KeeneticPppoeUptimeSensor(ControllerEntity, SensorEntity):
     """PPPoE bağlantı uptime sensörü."""
-
+    _attr_has_entity_name = True
     _attr_translation_key = "pppoe_uptime"
     _attr_icon = "mdi:timer-outline"
 
+    def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
+        ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
+
     @property
     def unique_id(self) -> str:
-        return f"{self._entry.entry_id}_pppoe_uptime"
+        return f"{self._entry_id}_pppoe_uptime"
 
     @property
     def name(self) -> str:
@@ -497,15 +442,18 @@ class KeeneticPppoeUptimeSensor(BaseKeeneticSensor):
         }
 
 
-class KeeneticActiveConnectionsSensor(BaseKeeneticSensor):
+class KeeneticActiveConnectionsSensor(ControllerEntity, SensorEntity):
     """Aktif bağlantı sayısı sensörü (conntotal - connfree)."""
-
+    _attr_has_entity_name = True
     _attr_translation_key = "active_connections"
     _attr_icon = "mdi:connection"
 
+    def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
+        ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
+
     @property
     def unique_id(self) -> str:
-        return f"{self._entry.entry_id}_active_connections"
+        return f"{self._entry_id}_active_connections"
 
     @property
     def name(self) -> str:
@@ -517,7 +465,7 @@ class KeeneticActiveConnectionsSensor(BaseKeeneticSensor):
 
     @property
     def native_value(self) -> int:
-        sys = self._system
+        sys = self.coordinator.data.get("system", {}) or {}
         conntotal = sys.get("conntotal", 0)
         connfree = sys.get("connfree", 0)
         try:
@@ -527,7 +475,7 @@ class KeeneticActiveConnectionsSensor(BaseKeeneticSensor):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
-        sys = self._system
+        sys = self.coordinator.data.get("system", {}) or {}
         try:
             conntotal = int(sys.get("conntotal", 0))
             connfree = int(sys.get("connfree", 0))
@@ -541,15 +489,18 @@ class KeeneticActiveConnectionsSensor(BaseKeeneticSensor):
         }
 
 
-class KeeneticConnectedClientsSensor(BaseKeeneticSensor):
+class KeeneticConnectedClientsSensor(ControllerEntity, SensorEntity):
     """Bağlı cihaz sayısı sensörü."""
-
+    _attr_has_entity_name = True
     _attr_translation_key = "connected_clients"
     _attr_icon = "mdi:devices"
 
+    def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
+        ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
+
     @property
     def unique_id(self) -> str:
-        return f"{self._entry.entry_id}_connected_clients"
+        return f"{self._entry_id}_connected_clients"
 
     @property
     def name(self) -> str:
@@ -559,7 +510,7 @@ class KeeneticConnectedClientsSensor(BaseKeeneticSensor):
     def native_value(self) -> int:
         stats = self.coordinator.data.get("client_stats", {})
         return stats.get("connected", 0)
-       
+
     @property
     def native_unit_of_measurement(self) -> str:
         return "conn"
@@ -573,15 +524,18 @@ class KeeneticConnectedClientsSensor(BaseKeeneticSensor):
         }
 
 
-class KeeneticDisconnectedClientsSensor(BaseKeeneticSensor):
+class KeeneticDisconnectedClientsSensor(ControllerEntity, SensorEntity):
     """Bağlı olmayan (bilinen) cihaz sayısı sensörü."""
-
+    _attr_has_entity_name = True
     _attr_translation_key = "disconnected_clients"
     _attr_icon = "mdi:devices-off"
 
+    def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
+        ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
+
     @property
     def unique_id(self) -> str:
-        return f"{self._entry.entry_id}_disconnected_clients"
+        return f"{self._entry_id}_disconnected_clients"
 
     @property
     def name(self) -> str:
@@ -591,21 +545,24 @@ class KeeneticDisconnectedClientsSensor(BaseKeeneticSensor):
     def native_value(self) -> int:
         stats = self.coordinator.data.get("client_stats", {})
         return stats.get("disconnected", 0)
-    
+
     @property
     def native_unit_of_measurement(self) -> str:
         return "conn"
 
 
-class KeeneticExtenderCountSensor(BaseKeeneticSensor):
+class KeeneticExtenderCountSensor(ControllerEntity, SensorEntity):
     """Mesh extender/repeater sayısı sensörü."""
-
+    _attr_has_entity_name = True
     _attr_translation_key = "extender_count"
     _attr_icon = "mdi:access-point-network"
 
+    def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
+        ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
+
     @property
     def unique_id(self) -> str:
-        return f"{self._entry.entry_id}_extender_count"
+        return f"{self._entry_id}_extender_count"
 
     @property
     def name(self) -> str:
@@ -622,7 +579,6 @@ class KeeneticExtenderCountSensor(BaseKeeneticSensor):
         connected = sum(1 for n in mesh_nodes if n.get("connected", False))
         disconnected = len(mesh_nodes) - connected
         
-        # Node listesi
         node_list = []
         for node in mesh_nodes:
             node_list.append({
@@ -639,119 +595,18 @@ class KeeneticExtenderCountSensor(BaseKeeneticSensor):
         }
 
 
-class KeeneticDownloadSpeedSensor(BaseKeeneticSensor):
-    """Anlık indirme hızı sensörü."""
-
-    _attr_translation_key = "download_speed"
-    _attr_icon = "mdi:download-network"
-
-    @property
-    def unique_id(self) -> str:
-        return f"{self._entry.entry_id}_download_speed"
-
-    @property
-    def name(self) -> str:
-        return "Download Speed"
-
-    @property
-    def native_unit_of_measurement(self) -> str:
-        return "MB/s"
-
-    @property
-    def native_value(self) -> float:
-        stats = self.coordinator.data.get("traffic_stats", {})
-        return stats.get("download_speed", 0.0)
-
-
-class KeeneticUploadSpeedSensor(BaseKeeneticSensor):
-    """Anlık yükleme hızı sensörü."""
-
-    _attr_translation_key = "upload_speed"
-    _attr_icon = "mdi:upload-network"
-
-    @property
-    def unique_id(self) -> str:
-        return f"{self._entry.entry_id}_upload_speed"
-
-    @property
-    def name(self) -> str:
-        return "Upload Speed"
-
-    @property
-    def native_unit_of_measurement(self) -> str:
-        return "MB/s"
-
-    @property
-    def native_value(self) -> float:
-        stats = self.coordinator.data.get("traffic_stats", {})
-        return stats.get("upload_speed", 0.0)
-
-
-class KeeneticTotalDownloadSensor(BaseKeeneticSensor):
-    """Toplam indirilen veri sensörü."""
-
-    _attr_translation_key = "total_download"
-    _attr_icon = "mdi:download"
-
-    @property
-    def unique_id(self) -> str:
-        return f"{self._entry.entry_id}_total_download"
-
-    @property
-    def name(self) -> str:
-        return "Total Downloaded"
-
-    @property
-    def native_unit_of_measurement(self) -> str:
-        return UnitOfInformation.GIGABYTES
-
-    @property
-    def native_value(self) -> float:
-        stats = self.coordinator.data.get("traffic_stats", {})
-        total_rx = stats.get("total_rx", 0)
-        # Bytes -> GB
-        return round(float(total_rx) / (1024 ** 3), 2)
-
-
-class KeeneticTotalUploadSensor(BaseKeeneticSensor):
-    """Toplam yüklenen veri sensörü."""
-
-    _attr_translation_key = "total_upload"
-    _attr_icon = "mdi:upload"
-
-    @property
-    def unique_id(self) -> str:
-        return f"{self._entry.entry_id}_total_upload"
-
-    @property
-    def name(self) -> str:
-        return "Total Uploaded"
-
-    @property
-    def native_unit_of_measurement(self) -> str:
-        return UnitOfInformation.GIGABYTES
-
-    @property
-    def native_value(self) -> float:
-        stats = self.coordinator.data.get("traffic_stats", {})
-        total_tx = stats.get("total_tx", 0)
-        # Bytes -> GB
-        return round(float(total_tx) / (1024 ** 3), 2)
-
-
-class KeeneticUsbStorageSensor(BaseKeeneticSensor):
+class KeeneticUsbStorageSensor(ControllerEntity, SensorEntity):
     """USB depolama sensörü."""
-
+    _attr_has_entity_name = True
     _attr_translation_key = "usb_storage"
     _attr_icon = "mdi:usb-flash-drive"
 
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry, device_id: str) -> None:
-        super().__init__(coordinator, entry)
+        ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
         self._device_id = device_id
 
     @property
     def _device(self) -> dict[str, Any] | None:
-        """Get current device data."""
         devices = self.coordinator.data.get("usb_storage", [])
         for device in devices:
             if device.get("id") == self._device_id:
@@ -761,7 +616,7 @@ class KeeneticUsbStorageSensor(BaseKeeneticSensor):
     @property
     def unique_id(self) -> str:
         safe_id = self._device_id.replace("/", "_").replace(" ", "_").lower()
-        return f"{self._entry.entry_id}_usb_{safe_id}"
+        return f"{self._entry_id}_usb_{safe_id}"
 
     @property
     def name(self) -> str:
@@ -777,7 +632,6 @@ class KeeneticUsbStorageSensor(BaseKeeneticSensor):
 
     @property
     def native_value(self) -> float | None:
-        """Return used percentage."""
         device = self._device
         if device:
             try:
@@ -801,7 +655,6 @@ class KeeneticUsbStorageSensor(BaseKeeneticSensor):
         used = device.get("used", 0)
         free = device.get("free", 0)
         
-        # Yüzde hesapla
         percent_used = round((used / total) * 100, 1) if total > 0 else 0
         
         return {
@@ -825,47 +678,19 @@ class KeeneticUsbStorageSensor(BaseKeeneticSensor):
         }
 
 
-class KeeneticMeshFirmwareSensor(BaseKeeneticSensor):
+class KeeneticMeshFirmwareSensor(MeshEntity, SensorEntity):
     """Mesh node firmware güncelleme sensörü."""
-
+    _attr_has_entity_name = True
     _attr_translation_key = "mesh_firmware"
     _attr_icon = "mdi:update"
 
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry, node_cid: str) -> None:
-        super().__init__(coordinator, entry)
-        self._node_cid = node_cid
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        node = self._node
-        if node:
-            node_name = node.get("name") or node.get("mac") or self._node_cid
-            return {
-                "identifiers": {(DOMAIN, f"mesh_{self._node_cid}")},
-                "name": f"Mesh - {node_name}",
-                "manufacturer": "Keenetic",
-                "model": node.get("model") or "Extender",
-                "via_device": (DOMAIN, self._entry.entry_id),
-            }
-        return {
-            "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": self._entry.title,
-            "manufacturer": "Keenetic",
-        }
-    
-    @property
-    def _node(self) -> dict[str, Any] | None:
-        """Get current node data."""
-        nodes = self.coordinator.data.get("mesh_nodes", [])
-        for node in nodes:
-            if (node.get("cid") or node.get("id")) == self._node_cid:
-                return node
-        return None
+        MeshEntity.__init__(self, coordinator, entry.entry_id, entry.title, node_cid)
 
     @property
     def unique_id(self) -> str:
-        safe_cid = self._node_cid.replace("-", "").replace(":", "")[:16]
-        return f"{self._entry.entry_id}_mesh_{safe_cid}_firmware"
+        safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
+        return f"{self._entry_id}_mesh_{safe_cid}_firmware"
 
     @property
     def name(self) -> str:
@@ -877,7 +702,6 @@ class KeeneticMeshFirmwareSensor(BaseKeeneticSensor):
 
     @property
     def native_value(self) -> str | None:
-        """Return current firmware version."""
         node = self._node
         if node:
             return node.get("firmware")
@@ -892,7 +716,6 @@ class KeeneticMeshFirmwareSensor(BaseKeeneticSensor):
         current = node.get("firmware")
         available = node.get("firmware_available")
         
-        # Güncelleme var mı?
         update_available = False
         if current and available and current != available:
             update_available = True
@@ -906,9 +729,9 @@ class KeeneticMeshFirmwareSensor(BaseKeeneticSensor):
         }
 
 
-class KeeneticMeshUsbStorageSensor(BaseKeeneticSensor):
+class KeeneticMeshUsbStorageSensor(MeshEntity, SensorEntity):
     """USB depolama sensörü - Mesh node üzerindeki USB."""
-
+    _attr_has_entity_name = True
     _attr_translation_key = "mesh_usb_storage"
     _attr_icon = "mdi:usb-flash-drive"
 
@@ -918,31 +741,15 @@ class KeeneticMeshUsbStorageSensor(BaseKeeneticSensor):
         entry: ConfigEntry,
         device_id: str,
         mesh_node_name: str | None = None,
-        mesh_cid: str | None = None,
+        mesh_cid: str | None = None, 
     ) -> None:
-        super().__init__(coordinator, entry)
+        MeshEntity.__init__(self, coordinator, entry.entry_id, entry.title, mesh_cid or device_id)
         self._device_id = device_id
         self._mesh_node_name = mesh_node_name or "Unknown"
         self._mesh_cid = mesh_cid
 
     @property
-    def device_info(self) -> dict[str, Any]:
-        if self._mesh_cid:
-            return {
-                "identifiers": {(DOMAIN, f"mesh_{self._mesh_cid}")},
-                "name": f"Mesh - {self._mesh_node_name}",
-                "manufacturer": "Keenetic",
-                "via_device": (DOMAIN, self._entry.entry_id),
-            }
-        return {
-            "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": self._entry.title,
-            "manufacturer": "Keenetic",
-        }   
-
-    @property
     def _device(self) -> dict[str, Any] | None:
-        """Get current device data from mesh USB list."""
         devices = self.coordinator.data.get("mesh_usb", [])
         for device in devices:
             if device.get("id") == self._device_id:
@@ -952,8 +759,8 @@ class KeeneticMeshUsbStorageSensor(BaseKeeneticSensor):
     @property
     def unique_id(self) -> str:
         safe_id = self._device_id.replace("/", "_").replace(" ", "_").lower()
-        safe_cid = (self._mesh_cid or "unknown").replace("-", "").replace(":", "")[:12]
-        return f"{self._entry.entry_id}_mesh_{safe_cid}_usb_{safe_id}"
+        safe_cid = (self._mesh_cid or "unknown").replace("-", "_").replace(":", "_")[:12]
+        return f"{self._entry_id}_mesh_{safe_cid}_usb_{safe_id}"
 
     @property
     def name(self) -> str:
@@ -969,7 +776,6 @@ class KeeneticMeshUsbStorageSensor(BaseKeeneticSensor):
 
     @property
     def native_value(self) -> float | None:
-        """Return used space in GB."""
         device = self._device
         if device:
             used = device.get("used", 0)
@@ -1004,33 +810,20 @@ class KeeneticMeshUsbStorageSensor(BaseKeeneticSensor):
             "percent_used": percent_used,
         }
 
-class KeeneticMeshUptimeSensor(BaseKeeneticSensor):
+
+class KeeneticMeshUptimeSensor(MeshEntity, SensorEntity):
     """Mesh node uptime sensor."""
+    _attr_has_entity_name = True
     _attr_translation_key = "mesh_uptime"
     _attr_icon = "mdi:timer-outline"
 
-    def __init__(
-        self, 
-        coordinator: KeeneticCoordinator, 
-        entry: ConfigEntry, 
-        node_cid: str
-    ) -> None:
-        super().__init__(coordinator, entry)
-        self._node_cid = node_cid
-
-    @property
-    def _node(self) -> dict[str, Any] | None:
-        """Get current node data."""
-        nodes = self.coordinator.data.get("mesh_nodes", [])
-        for node in nodes:
-            if (node.get("cid") or node.get("id")) == self._node_cid:
-                return node
-        return None
+    def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry, node_cid: str) -> None:
+        MeshEntity.__init__(self, coordinator, entry.entry_id, entry.title, node_cid)
 
     @property
     def unique_id(self) -> str:
-        safe_cid = self._node_cid.replace("-", "").replace(":", "")[:16]
-        return f"{self._entry.entry_id}_mesh_{safe_cid}_uptime"
+        safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
+        return f"{self._entry_id}_mesh_{safe_cid}_uptime"
 
     @property
     def name(self) -> str:
@@ -1046,7 +839,6 @@ class KeeneticMeshUptimeSensor(BaseKeeneticSensor):
 
     @property
     def native_value(self) -> int:
-        """Return uptime in seconds."""
         node = self._node
         if node:
             uptime = node.get("uptime")
@@ -1057,54 +849,21 @@ class KeeneticMeshUptimeSensor(BaseKeeneticSensor):
                     pass
         return 0
 
-    @property
-    def device_info(self) -> dict[str, Any]:
-        """Создаёт ОТДЕЛЬНОЕ устройство для этого ретранслятора."""
-        node = self._node
-        if node:
-            node_name = node.get("name") or node.get("mac") or self._node_cid
-            return {
-                "identifiers": {(DOMAIN, f"mesh_{self._node_cid}")},
-                "name": f"Mesh - {node_name}",
-                "manufacturer": "Keenetic",
-                "model": node.get("model") or "Extender",
-                "via_device": (DOMAIN, self._entry.entry_id),  # Связь с главным роутером
-            }
-        return {
-            "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": self._entry.title,
-            "manufacturer": "Keenetic",
-        }
-        
-      
-class KeeneticMeshClientsSensor(BaseKeeneticSensor):
+
+class KeeneticMeshClientsSensor(MeshEntity, SensorEntity):
     """Mesh node active clients sensor."""
+    _attr_has_entity_name = True
     _attr_translation_key = "mesh_clients"
     _attr_icon = "mdi:account-group"
     _attr_state_class = "measurement"
 
-    def __init__(
-        self, 
-        coordinator: KeeneticCoordinator, 
-        entry: ConfigEntry, 
-        node_cid: str
-    ) -> None:
-        super().__init__(coordinator, entry)
-        self._node_cid = node_cid
-
-    @property
-    def _node(self) -> dict[str, Any] | None:
-        """Get current node data."""
-        nodes = self.coordinator.data.get("mesh_nodes", [])
-        for node in nodes:
-            if (node.get("cid") or node.get("id")) == self._node_cid:
-                return node
-        return None
+    def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry, node_cid: str) -> None:
+        MeshEntity.__init__(self, coordinator, entry.entry_id, entry.title, node_cid)
 
     @property
     def unique_id(self) -> str:
         safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
-        return f"{self._entry.entry_id}_mesh_{safe_cid}_clients"
+        return f"{self._entry_id}_mesh_{safe_cid}_clients"
 
     @property
     def name(self) -> str:
@@ -1116,7 +875,6 @@ class KeeneticMeshClientsSensor(BaseKeeneticSensor):
 
     @property
     def native_value(self) -> int:
-        """Return number of connected clients."""
         node = self._node
         if node:
             associations = node.get("associations")
@@ -1129,7 +887,6 @@ class KeeneticMeshClientsSensor(BaseKeeneticSensor):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
-        """Additional attributes."""
         node = self._node
         if not node:
             return None
@@ -1141,128 +898,3 @@ class KeeneticMeshClientsSensor(BaseKeeneticSensor):
             "model": node.get("model"),
             "mode": node.get("mode"),
         }
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        """Создаёт ОТДЕЛЬНОЕ устройство для этого ретранслятора."""
-        node = self._node
-        if node:
-            node_name = node.get("name") or node.get("mac") or self._node_cid
-            return {
-                "identifiers": {(DOMAIN, f"mesh_{self._node_cid}")},
-                "name": f"Mesh - {node_name}",
-                "manufacturer": "Keenetic",
-                "model": node.get("model") or "Extender",
-                "via_device": (DOMAIN, self._entry.entry_id),
-            }
-        return {
-            "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": self._entry.title,
-            "manufacturer": "Keenetic",
-        }
-        
-class KeeneticWifiChannelLoadSensor(BaseKeeneticSensor):
-    """WiFi channel utilization/load sensor (percentage of time channel is busy)."""
-    _attr_translation_key = "wifi_channel_load"
-    _attr_icon = "mdi:wifi-strength-lock"
-    _attr_native_unit_of_measurement = PERCENTAGE
-    _attr_state_class = "measurement"
-
-    def __init__(
-        self, 
-        coordinator: KeeneticCoordinator, 
-        entry: ConfigEntry, 
-        band: str
-    ) -> None:
-        super().__init__(coordinator, entry)
-        self._band = band  # "2.4 GHz" or "5 GHz"
-
-    @property
-    def unique_id(self) -> str:
-        band_key = self._band.replace(" ", "_").lower()
-        return f"{self._entry.entry_id}_wifi_{band_key}_channel_load"
-
-    @property
-    def name(self) -> str:
-        return f"WiFi - {self._band} Channel Load"
-
-    @property
-    def native_value(self) -> float | None:
-        """Return channel utilization percentage."""
-        util_data = self.coordinator.data.get("wifi_utilization", {})
-        band_data = util_data.get(self._band, {})
-        return band_data.get("utilization")
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
-        util_data = self.coordinator.data.get("wifi_utilization", {})
-        band_data = util_data.get(self._band, {})
-        
-        attrs = {
-            "band": self._band,
-            "channel": band_data.get("channel"),
-        }
-        
-        interference = band_data.get("interference")
-        if interference is not None:
-            attrs["interference"] = interference
-            
-        return attrs
-
-    @property
-    def available(self) -> bool:
-        return self.native_value is not None
-
-
-class KeeneticWifiNoiseFloorSensor(BaseKeeneticSensor):
-    """WiFi noise floor sensor (signal interference level in dBm)."""
-    _attr_translation_key = "wifi_noise_floor"
-    _attr_icon = "mdi:signal"
-    _attr_native_unit_of_measurement = "dBm"
-    _attr_state_class = "measurement"
-    _attr_entity_registry_enabled_default = False  # Скрыт по умолчанию, для продвинутых
-
-    def __init__(
-        self, 
-        coordinator: KeeneticCoordinator, 
-        entry: ConfigEntry, 
-        band: str
-    ) -> None:
-        super().__init__(coordinator, entry)
-        self._band = band
-
-    @property
-    def unique_id(self) -> str:
-        band_key = self._band.replace(" ", "_").lower()
-        return f"{self._entry.entry_id}_wifi_{band_key}_noise"
-
-    @property
-    def name(self) -> str:
-        return f"WiFi - {self._band} Noise Floor"
-
-    @property
-    def native_value(self) -> int | None:
-        """Return noise floor in dBm (negative value, lower is better)."""
-        util_data = self.coordinator.data.get("wifi_utilization", {})
-        band_data = util_data.get(self._band, {})
-        noise = band_data.get("noise")
-        if noise is not None:
-            try:
-                return int(noise)
-            except (TypeError, ValueError):
-                pass
-        return None
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
-        util_data = self.coordinator.data.get("wifi_utilization", {})
-        band_data = util_data.get(self._band, {})
-        return {
-            "band": self._band,
-            "channel": band_data.get("channel"),
-            "utilization": band_data.get("utilization"),
-        }
-
-    @property
-    def available(self) -> bool:
-        return self.native_value is not None

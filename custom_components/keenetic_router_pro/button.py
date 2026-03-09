@@ -1,17 +1,14 @@
 """Buttons for Keenetic Router Pro (e.g. reboot)."""
-
 from __future__ import annotations
-
 from typing import Any
-
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-
 from .api import KeeneticClient
 from .const import DOMAIN, DATA_CLIENT, DATA_COORDINATOR
 from .coordinator import KeeneticCoordinator
+from .entity import ControllerEntity, MeshEntity
 
 
 async def async_setup_entry(
@@ -23,9 +20,8 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: KeeneticCoordinator = data[DATA_COORDINATOR]
     client: KeeneticClient = data[DATA_CLIENT]
-
     entities: list[ButtonEntity] = [KeeneticRebootButton(coordinator, entry, client)]
-    
+
     # Mesh node reboot butonları
     mesh_nodes = coordinator.data.get("mesh_nodes", [])
     for node in mesh_nodes:
@@ -36,9 +32,8 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class KeeneticRebootButton(ButtonEntity):
+class KeeneticRebootButton(ControllerEntity, ButtonEntity):
     """Button to reboot the router."""
-
     _attr_has_entity_name = True
     _attr_name = "Reboot Router"
 
@@ -48,32 +43,19 @@ class KeeneticRebootButton(ButtonEntity):
         entry: ConfigEntry,
         client: KeeneticClient,
     ) -> None:
-        self._coordinator = coordinator
-        self._entry = entry
+        ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
         self._client = client
 
     @property
     def unique_id(self) -> str:
-        return f"{self._entry.entry_id}_reboot_button"
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        return {
-            "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": self._entry.title,
-            "manufacturer": "Keenetic",
-        }
+        return f"{self._entry_id}_reboot_button"
 
     async def async_press(self, **_: Any) -> None:
-        # İstersen burada persistent_notification ile "emin misin" diyebilirsin.
         await self._client.async_reboot()
-        # Reboot sonrası router kısa süre offline olacak;
-        # coordinator otomatik olarak bir sonraki denemede toparlar.
 
 
-class KeeneticMeshRebootButton(ButtonEntity):
+class KeeneticMeshRebootButton(MeshEntity, ButtonEntity):
     """Button to reboot a mesh/extender node."""
-
     _attr_has_entity_name = True
     _attr_icon = "mdi:restart"
 
@@ -84,24 +66,13 @@ class KeeneticMeshRebootButton(ButtonEntity):
         client: KeeneticClient,
         node_cid: str,
     ) -> None:
-        self._coordinator = coordinator
-        self._entry = entry
+        MeshEntity.__init__(self, coordinator, entry.entry_id, entry.title, node_cid)
         self._client = client
-        self._node_cid = node_cid
-
-    @property
-    def _node(self) -> dict[str, Any] | None:
-        """Get current node data from coordinator."""
-        nodes = self._coordinator.data.get("mesh_nodes", [])
-        for node in nodes:
-            if (node.get("cid") or node.get("id")) == self._node_cid:
-                return node
-        return None
 
     @property
     def unique_id(self) -> str:
-        safe_cid = self._node_cid.replace("-", "").replace(":", "")[:16]
-        return f"{self._entry.entry_id}_mesh_{safe_cid}_reboot"
+        safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
+        return f"{self._entry_id}_mesh_{safe_cid}_reboot"
 
     @property
     def name(self) -> str:
@@ -110,24 +81,6 @@ class KeeneticMeshRebootButton(ButtonEntity):
             node_name = node.get("name") or node.get("mac") or self._node_cid
             return f"Reboot {node_name}"
         return f"Reboot {self._node_cid}"
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        node = self._node
-        if node:
-            node_name = node.get("name") or node.get("mac") or self._node_cid
-            return {
-                "identifiers": {(DOMAIN, f"mesh_{self._node_cid}")},
-                "name": f"Mesh - {node_name}",
-                "manufacturer": "Keenetic",
-                "model": node.get("model") or "Extender",
-                "via_device": (DOMAIN, self._entry.entry_id),
-            }
-        return {
-            "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": self._entry.title,
-            "manufacturer": "Keenetic",
-        }
 
     async def async_press(self, **_: Any) -> None:
         await self._client.async_reboot_mesh_node(self._node_cid)

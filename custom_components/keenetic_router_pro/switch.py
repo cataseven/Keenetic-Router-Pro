@@ -1,18 +1,14 @@
 """Switches for Keenetic Router Pro (Wi-Fi + WireGuard on/off)."""
-
 from __future__ import annotations
-
 from typing import Any
-
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
-
 from .api import KeeneticClient
 from .const import DOMAIN, DATA_CLIENT, DATA_COORDINATOR
 from .coordinator import KeeneticCoordinator
+from .entity import ControllerEntity
 
 
 async def async_setup_entry(
@@ -24,7 +20,6 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: KeeneticCoordinator = data[DATA_COORDINATOR]
     client: KeeneticClient = data[DATA_CLIENT]
-
     entities: list[SwitchEntity] = []
 
     # Wi-Fi interface switch'leri
@@ -56,14 +51,13 @@ async def async_setup_entry(
                 profile=profile,
             )
         )
-        
+    
     if entities:
         async_add_entities(entities)
 
 
-class BaseKeeneticSwitch(CoordinatorEntity, SwitchEntity):
+class BaseKeeneticSwitch(ControllerEntity, SwitchEntity):
     """Base switch class sharing device_info + refresh logic."""
-
     _attr_has_entity_name = True
 
     def __init__(
@@ -72,17 +66,8 @@ class BaseKeeneticSwitch(CoordinatorEntity, SwitchEntity):
         entry: ConfigEntry,
         client: KeeneticClient,
     ) -> None:
-        super().__init__(coordinator)
-        self._entry = entry
+        ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
         self._client = client
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        return {
-            "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": self._entry.title,
-            "manufacturer": "Keenetic",
-        }
 
 
 class KeeneticWifiSwitch(BaseKeeneticSwitch):
@@ -99,12 +84,11 @@ class KeeneticWifiSwitch(BaseKeeneticSwitch):
         super().__init__(coordinator, entry, client)
         self._interface_id = interface_id
         self._display_name = display_name
-        # Örn: "Wi-Fi WifiMaster0" / "Wi-Fi WifiMaster1"
         self._attr_name = f"Wi-Fi {self._display_name}"
 
     @property
     def unique_id(self) -> str:
-        return f"{self._entry.entry_id}_wifi_{self._interface_id}"
+        return f"{self._entry_id}_wifi_{self._interface_id}"
 
     @property
     def is_on(self) -> bool:
@@ -114,7 +98,6 @@ class KeeneticWifiSwitch(BaseKeeneticSwitch):
                 enabled = net.get("enabled")
                 if enabled is not None:
                     return bool(enabled)
-                # Bazı durumlarda sadece state: up/down olabilir
                 state = str(net.get("state", "")).lower()
                 if state:
                     return state == "up"
@@ -141,15 +124,13 @@ class KeeneticVpnSwitch(BaseKeeneticSwitch):
         profile: dict[str, Any],
     ) -> None:
         super().__init__(coordinator, entry, client)
-        self._iface_id = iface_id  # Örn: "Wireguard5", "OpenVpn0"
+        self._iface_id = iface_id
         self._profile_type = str(profile.get("type") or "").lower()
         self._label = profile.get("label") or iface_id
 
-        # İsimlendirme: "Wireguard - Stockholm", "OpenVPN - Office", "VPN - X"
         if self._profile_type == "wireguard":
             prefix = "Wireguard"
         elif self._profile_type:
-            # Type'ı ilk harf büyük yapalım
             prefix = self._profile_type.capitalize()
         else:
             prefix = "VPN"
@@ -158,9 +139,7 @@ class KeeneticVpnSwitch(BaseKeeneticSwitch):
 
     @property
     def unique_id(self) -> str:
-        return f"{self._entry.entry_id}_vpn_{self._iface_id}"
-
-    # ---- Durum ----
+        return f"{self._entry_id}_vpn_{self._iface_id}"
 
     def _current_profile(self) -> dict[str, Any]:
         vpn = self.coordinator.data.get("vpn_tunnels", {}) or {}
@@ -177,14 +156,10 @@ class KeeneticVpnSwitch(BaseKeeneticSwitch):
             return state == "up"
         return False
 
-    # ---- Komutlar ----
-
     async def async_turn_on(self, **_: Any) -> None:
-        # Not: async_set_wireguard_enabled aslında generic "interface up/down"
         await self._client.async_set_wireguard_enabled(self._iface_id, True)
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **_: Any) -> None:
         await self._client.async_set_wireguard_enabled(self._iface_id, False)
         await self.coordinator.async_request_refresh()
-
