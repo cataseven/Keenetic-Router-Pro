@@ -46,6 +46,7 @@ async def async_setup_entry(
         if node_cid:
             entities.append(KeeneticMeshFirmwareSensor(coordinator, entry, node_cid))
             entities.append(KeeneticMeshUptimeSensor(coordinator, entry, node_cid))
+            entities.append(KeeneticMeshClientsSensor(coordinator, entry, node_cid))
 
     # WireGuard profilleri için sensörler
     wg_profiles = coordinator.data.get("wireguard", {}).get("profiles", {})
@@ -558,6 +559,10 @@ class KeeneticConnectedClientsSensor(BaseKeeneticSensor):
     def native_value(self) -> int:
         stats = self.coordinator.data.get("client_stats", {})
         return stats.get("connected", 0)
+       
+    @property
+    def native_unit_of_measurement(self) -> str:
+        return "conn"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
@@ -586,6 +591,10 @@ class KeeneticDisconnectedClientsSensor(BaseKeeneticSensor):
     def native_value(self) -> int:
         stats = self.coordinator.data.get("client_stats", {})
         return stats.get("disconnected", 0)
+    
+    @property
+    def native_unit_of_measurement(self) -> str:
+        return "conn"
 
 
 class KeeneticExtenderCountSensor(BaseKeeneticSensor):
@@ -1066,3 +1075,194 @@ class KeeneticMeshUptimeSensor(BaseKeeneticSensor):
             "name": self._entry.title,
             "manufacturer": "Keenetic",
         }
+        
+      
+class KeeneticMeshClientsSensor(BaseKeeneticSensor):
+    """Mesh node active clients sensor."""
+    _attr_translation_key = "mesh_clients"
+    _attr_icon = "mdi:account-group"
+    _attr_state_class = "measurement"
+
+    def __init__(
+        self, 
+        coordinator: KeeneticCoordinator, 
+        entry: ConfigEntry, 
+        node_cid: str
+    ) -> None:
+        super().__init__(coordinator, entry)
+        self._node_cid = node_cid
+
+    @property
+    def _node(self) -> dict[str, Any] | None:
+        """Get current node data."""
+        nodes = self.coordinator.data.get("mesh_nodes", [])
+        for node in nodes:
+            if (node.get("cid") or node.get("id")) == self._node_cid:
+                return node
+        return None
+
+    @property
+    def unique_id(self) -> str:
+        safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
+        return f"{self._entry.entry_id}_mesh_{safe_cid}_clients"
+
+    @property
+    def name(self) -> str:
+        node = self._node
+        if node:
+            node_name = node.get("name") or node.get("mac") or self._node_cid
+            return f"Mesh - {node_name} Clients"
+        return f"Mesh - {self._node_cid} Clients"
+
+    @property
+    def native_value(self) -> int:
+        """Return number of connected clients."""
+        node = self._node
+        if node:
+            associations = node.get("associations")
+            if associations is not None:
+                try:
+                    return int(associations)
+                except (TypeError, ValueError):
+                    pass
+        return 0
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Additional attributes."""
+        node = self._node
+        if not node:
+            return None
+        
+        return {
+            "cid": self._node_cid,
+            "mac": node.get("mac"),
+            "ip": node.get("ip"),
+            "model": node.get("model"),
+            "mode": node.get("mode"),
+        }
+
+    @property
+    def device_info(self) -> dict[str, Any]:
+        """Создаёт ОТДЕЛЬНОЕ устройство для этого ретранслятора."""
+        node = self._node
+        if node:
+            node_name = node.get("name") or node.get("mac") or self._node_cid
+            return {
+                "identifiers": {(DOMAIN, f"mesh_{self._node_cid}")},
+                "name": f"Mesh - {node_name}",
+                "manufacturer": "Keenetic",
+                "model": node.get("model") or "Extender",
+                "via_device": (DOMAIN, self._entry.entry_id),
+            }
+        return {
+            "identifiers": {(DOMAIN, self._entry.entry_id)},
+            "name": self._entry.title,
+            "manufacturer": "Keenetic",
+        }
+        
+class KeeneticWifiChannelLoadSensor(BaseKeeneticSensor):
+    """WiFi channel utilization/load sensor (percentage of time channel is busy)."""
+    _attr_translation_key = "wifi_channel_load"
+    _attr_icon = "mdi:wifi-strength-lock"
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = "measurement"
+
+    def __init__(
+        self, 
+        coordinator: KeeneticCoordinator, 
+        entry: ConfigEntry, 
+        band: str
+    ) -> None:
+        super().__init__(coordinator, entry)
+        self._band = band  # "2.4 GHz" or "5 GHz"
+
+    @property
+    def unique_id(self) -> str:
+        band_key = self._band.replace(" ", "_").lower()
+        return f"{self._entry.entry_id}_wifi_{band_key}_channel_load"
+
+    @property
+    def name(self) -> str:
+        return f"WiFi - {self._band} Channel Load"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return channel utilization percentage."""
+        util_data = self.coordinator.data.get("wifi_utilization", {})
+        band_data = util_data.get(self._band, {})
+        return band_data.get("utilization")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        util_data = self.coordinator.data.get("wifi_utilization", {})
+        band_data = util_data.get(self._band, {})
+        
+        attrs = {
+            "band": self._band,
+            "channel": band_data.get("channel"),
+        }
+        
+        interference = band_data.get("interference")
+        if interference is not None:
+            attrs["interference"] = interference
+            
+        return attrs
+
+    @property
+    def available(self) -> bool:
+        return self.native_value is not None
+
+
+class KeeneticWifiNoiseFloorSensor(BaseKeeneticSensor):
+    """WiFi noise floor sensor (signal interference level in dBm)."""
+    _attr_translation_key = "wifi_noise_floor"
+    _attr_icon = "mdi:signal"
+    _attr_native_unit_of_measurement = "dBm"
+    _attr_state_class = "measurement"
+    _attr_entity_registry_enabled_default = False  # Скрыт по умолчанию, для продвинутых
+
+    def __init__(
+        self, 
+        coordinator: KeeneticCoordinator, 
+        entry: ConfigEntry, 
+        band: str
+    ) -> None:
+        super().__init__(coordinator, entry)
+        self._band = band
+
+    @property
+    def unique_id(self) -> str:
+        band_key = self._band.replace(" ", "_").lower()
+        return f"{self._entry.entry_id}_wifi_{band_key}_noise"
+
+    @property
+    def name(self) -> str:
+        return f"WiFi - {self._band} Noise Floor"
+
+    @property
+    def native_value(self) -> int | None:
+        """Return noise floor in dBm (negative value, lower is better)."""
+        util_data = self.coordinator.data.get("wifi_utilization", {})
+        band_data = util_data.get(self._band, {})
+        noise = band_data.get("noise")
+        if noise is not None:
+            try:
+                return int(noise)
+            except (TypeError, ValueError):
+                pass
+        return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        util_data = self.coordinator.data.get("wifi_utilization", {})
+        band_data = util_data.get(self._band, {})
+        return {
+            "band": self._band,
+            "channel": band_data.get("channel"),
+            "utilization": band_data.get("utilization"),
+        }
+
+    @property
+    def available(self) -> bool:
+        return self.native_value is not None
