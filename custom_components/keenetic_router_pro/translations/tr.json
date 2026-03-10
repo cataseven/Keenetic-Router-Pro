@@ -46,37 +46,98 @@
   },
   "entity": {
     "sensor": {
-      "cpu_load": {"name": "CPU Yükü"},
-      "memory_usage": {"name": "Bellek Kullanımı"},
-      "uptime": {"name": "Çalışma Süresi"},
-      "wan_status": {"name": "WAN Durumu"},
-      "wan_ip": {"name": "WAN IP"},
-      "connected_clients": {"name": "Bağlı Cihazlar"},
-      "disconnected_clients": {"name": "Bağlı Olmayan Cihazlar"},
-      "download_speed": {"name": "İndirme Hızı"},
-      "upload_speed": {"name": "Yükleme Hızı"},
-      "total_download": {"name": "Toplam İndirilen"},
-      "total_upload": {"name": "Toplam Yüklenen"},
-      "ap_client_count": {"name": "AP Cihaz Sayısı"},
-      "wireguard_uptime": {"name": "WireGuard Çalışma Süresi"},
-      "wireguard_rx": {"name": "WireGuard Alınan"},
-      "wireguard_tx": {"name": "WireGuard Gönderilen"},
-      "usb_storage": {"name": "USB Depolama"},
-      "mesh_usb_storage": {"name": "Mesh USB Depolama"},
-      "mesh_firmware": {"name": "Mesh Firmware"},
-      "extender_count": {"name": "Genişletici Sayısı"},
-      "pppoe_uptime": {"name": "PPPoE Çalışma Süresi"},
-      "active_connections": {"name": "Aktif Bağlantılar"}
+      "cpu_load": {
+        "name": "CPU Yükü"
+      },
+      "memory_usage": {
+        "name": "Bellek Kullanımı"
+      },
+      "uptime": {
+        "name": "Çalışma Süresi"
+      },
+      "wan_status": {
+        "name": "WAN Durumu"
+      },
+      "wan_ip": {
+        "name": "WAN IP"
+      },
+      "connected_clients": {
+        "name": "Bağlı Cihazlar"
+      },
+      "disconnected_clients": {
+        "name": "Bağlı Olmayan Cihazlar"
+      },
+      "download_speed": {
+        "name": "İndirme Hızı"
+      },
+      "upload_speed": {
+        "name": "Yükleme Hızı"
+      },
+      "total_download": {
+        "name": "Toplam İndirilen"
+      },
+      "total_upload": {
+        "name": "Toplam Yüklenen"
+      },
+      "ap_client_count": {
+        "name": "AP Cihaz Sayısı"
+      },
+      "wireguard_uptime": {
+        "name": "WireGuard Çalışma Süresi"
+      },
+      "wireguard_rx": {
+        "name": "WireGuard Alınan"
+      },
+      "wireguard_tx": {
+        "name": "WireGuard Gönderilen"
+      },
+      "usb_storage": {
+        "name": "USB Depolama"
+      },
+      "mesh_usb_storage": {
+        "name": "Mesh USB Depolama"
+      },
+      "mesh_firmware": {
+        "name": "Mesh Firmware"
+      },
+      "extender_count": {
+        "name": "Genişletici Sayısı"
+      },
+      "pppoe_uptime": {
+        "name": "PPPoE Çalışma Süresi"
+      },
+      "active_connections": {
+        "name": "Aktif Bağlantılar"
+      },
+      "firmware_version": {
+        "name": "Yazılım Sürümü"
+      },
+      "mesh_firmware_version": {
+        "name": "Yazılım Sürümü"
+      }
     },
     "binary_sensor": {
-      "mesh_node": {"name": "Mesh Düğümü"}
+      "mesh_node": {
+        "name": "Mesh Düğümü"
+      }
     },
     "button": {
-      "reboot": {"name": "Router'ı Yeniden Başlat"},
-      "mesh_reboot": {"name": "Mesh Düğümünü Yeniden Başlat"}
+      "reboot": {
+        "name": "Router'ı Yeniden Başlat"
+      },
+      "mesh_reboot": {
+        "name": "Mesh Düğümünü Yeniden Başlat"
+      }
     },
     "select": {
-      "access_policy": {"name": "Erişim Politikası"}
+      "access_policy": {
+        "name": "Erişim Politikası"
+      }
+    },
+    "update": {
+      "firmware_update": {
+        "name": "Yazılım Güncelleme"
+      }
     }
   }
 }

@@ -46,37 +46,98 @@
   },
   "entity": {
     "sensor": {
-      "cpu_load": {"name": "Загрузка CPU"},
-      "memory_usage": {"name": "Использование памяти"},
-      "uptime": {"name": "Время работы"},
-      "wan_status": {"name": "Статус WAN"},
-      "wan_ip": {"name": "WAN IP"},
-      "connected_clients": {"name": "Подключенные устройства"},
-      "disconnected_clients": {"name": "Отключенные устройства"},
-      "download_speed": {"name": "Скорость загрузки"},
-      "upload_speed": {"name": "Скорость отдачи"},
-      "total_download": {"name": "Всего загружено"},
-      "total_upload": {"name": "Всего отдано"},
-      "ap_client_count": {"name": "Устройства на AP"},
-      "wireguard_uptime": {"name": "Время работы WireGuard"},
-      "wireguard_rx": {"name": "WireGuard получено"},
-      "wireguard_tx": {"name": "WireGuard отправлено"},
-      "usb_storage": {"name": "USB-хранилище"},
-      "mesh_usb_storage": {"name": "Mesh USB-хранилище"},
-      "mesh_firmware": {"name": "Прошивка Mesh"},
-      "extender_count": {"name": "Количество расширителей"},
-      "pppoe_uptime": {"name": "Время работы PPPoE"},
-      "active_connections": {"name": "Активные соединения"}
+      "cpu_load": {
+        "name": "Загрузка CPU"
+      },
+      "memory_usage": {
+        "name": "Использование памяти"
+      },
+      "uptime": {
+        "name": "Время работы"
+      },
+      "wan_status": {
+        "name": "Статус WAN"
+      },
+      "wan_ip": {
+        "name": "WAN IP"
+      },
+      "connected_clients": {
+        "name": "Подключенные устройства"
+      },
+      "disconnected_clients": {
+        "name": "Отключенные устройства"
+      },
+      "download_speed": {
+        "name": "Скорость загрузки"
+      },
+      "upload_speed": {
+        "name": "Скорость отдачи"
+      },
+      "total_download": {
+        "name": "Всего загружено"
+      },
+      "total_upload": {
+        "name": "Всего отдано"
+      },
+      "ap_client_count": {
+        "name": "Устройства на AP"
+      },
+      "wireguard_uptime": {
+        "name": "Время работы WireGuard"
+      },
+      "wireguard_rx": {
+        "name": "WireGuard получено"
+      },
+      "wireguard_tx": {
+        "name": "WireGuard отправлено"
+      },
+      "usb_storage": {
+        "name": "USB-хранилище"
+      },
+      "mesh_usb_storage": {
+        "name": "Mesh USB-хранилище"
+      },
+      "mesh_firmware": {
+        "name": "Прошивка Mesh"
+      },
+      "extender_count": {
+        "name": "Количество расширителей"
+      },
+      "pppoe_uptime": {
+        "name": "Время работы PPPoE"
+      },
+      "active_connections": {
+        "name": "Активные соединения"
+      },
+      "firmware_version": {
+        "name": "Версия прошивки"
+      },
+      "mesh_firmware_version": {
+        "name": "Версия прошивки"
+      }
     },
     "binary_sensor": {
-      "mesh_node": {"name": "Mesh узел"}
+      "mesh_node": {
+        "name": "Mesh узел"
+      }
     },
     "button": {
-      "reboot": {"name": "Перезагрузить роутер"},
-      "mesh_reboot": {"name": "Перезагрузить Mesh узел"}
+      "reboot": {
+        "name": "Перезагрузить роутер"
+      },
+      "mesh_reboot": {
+        "name": "Перезагрузить Mesh узел"
+      }
     },
     "select": {
-      "access_policy": {"name": "Политика доступа"}
+      "access_policy": {
+        "name": "Политика доступа"
+      }
+    },
+    "update": {
+      "firmware_update": {
+        "name": "Обновление прошивки"
+      }
     }
   }
 }
