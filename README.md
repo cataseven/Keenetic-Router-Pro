@@ -1,34 +1,43 @@
 # Keenetic Router Pro - Home Assistant Integration
 
 [![hacs\_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
-[![version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/)
+[![version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/)
 
 <a href="https://www.buymeacoffee.com/cataseven" target="_blank">
   <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 60px !important; width: 217px !important;" >
 </a> 
 
-An advanced Home Assistant integration for Keenetic routers. Provides mesh network management, VPN control, device tracking, and more.
+An advanced Home Assistant integration for Keenetic routers. Provides mesh network management, VPN control, device tracking, traffic monitoring, firmware updates, and more.
 
 ## 🌟 Features
 
 ### 📡 Real Time Device Tracking
 
-* Real-time device status via **ICMP Ping**. You don't need to wait Keenetic's update time for device tracking. This integration ping the devices you selected in every 3 seconds.
+* Real-time device status via **ICMP Ping**. You don't need to wait Keenetic's update time for device tracking. This integration pings the devices you selected every 3 seconds.
 * Selectable client list
-* 3-seconds update interval
+* 3-second update interval
 * Automatic updates on IP address changes
 > [!IMPORTANT]
-> ⚠️ **If Apple IOS devices are registered with client name including 'apple', 'iphone' or 'ipad' then they will NOT be pinged in every 3 seconds. Instead of this, they will sync with status on Router's interface. This is because they go into Deep Sleep mode and disable wifi connection even they are connected to wifi.**
-
-![image3](images/dt.png)
+> ⚠️ **If Apple iOS devices are registered with client name including 'apple', 'iphone' or 'ipad' then they will NOT be pinged every 3 seconds. Instead, they will sync with the status on the Router's interface. This is because they go into Deep Sleep mode and disable WiFi connection even when they are connected to WiFi.**
 
 ### 🔗 Mesh Network Management
 
 * Status of all extenders/repeaters (binary sensors)
 * Separate **reboot button** for each mesh node
-* CPU, RAM, and uptime information
-* **Firmware update notification** (update available sensor)
-* Number of connected clients (associations)
+* CPU, RAM, and uptime information per node
+* Firmware version sensor for each node
+* **Firmware update entity** with update-available detection
+* Number of connected clients (associations) per node
+* **Traffic monitoring** per node (WiFi 2.4GHz/5GHz, LAN, WAN RX/TX)
+* **WiFi radio temperature** per node (2.4GHz / 5GHz)
+* **USB storage** detection on mesh nodes
+
+### 🔄 Firmware Updates
+
+* **Update entity** for the main router (with install + progress support)
+* **Update entity** for each mesh node (info-only)
+* Firmware version sensor (current version, channel, architecture details)
+* Binary sensor for update availability
 
 ### 🔐 VPN Management
 
@@ -44,14 +53,24 @@ An advanced Home Assistant integration for Keenetic routers. Provides mesh netwo
 ### 🌐 WAN Status
 
 * Real **WAN IP address** (PPPoE supported)
-* Connection status sensor
-* Uptime information
+* **3-state connection status**:
+  * `connected` — link up and IP address assigned (internet working)
+  * `link_up` — link up but no IP address (ISP issue / DHCP waiting)
+  * `down` — interface down or not found
+* PPPoE uptime sensor
+
+### 📊 Traffic & Diagnostics
+
+* **WiFi 2.4GHz / 5GHz** RX/TX traffic (GB)
+* **LAN / WAN** RX/TX traffic (GB)
+* **WiFi radio temperature** (2.4GHz / 5GHz)
+* Active connections count
+* USB storage detection
 
 ### 👥 Client Management
 
 * Number of connected / disconnected devices
 * **Connection Policy selection** (per client)
-
   * Default, VPN, No VPN, Smart Home, Roblox, etc.
   * Deny (block internet access)
 * **Event trigger** when a new device connects
@@ -63,7 +82,11 @@ An advanced Home Assistant integration for Keenetic routers. Provides mesh netwo
 
 ---
 
-![image4](images/ctrl.png)  ![image5](images/sensors.png)
+![image4](images/1.png)  ![image5](images/2.png)
+
+![image4](images/3.png)  ![image5](images/4.png)
+
+![image4](images/5.png)
 
 ## 📦 Installation
 
@@ -86,16 +109,15 @@ An advanced Home Assistant integration for Keenetic routers. Provides mesh netwo
 
 ### 1. Web management interface must be enabled on the router
 
-### 2 🔒Security, Firewall & Port Forwarding
+### 2. 🔒 Security, Firewall & Port Forwarding
 
 To use this integration **securely**, it is strongly recommended to configure **Firewall rules** and **Port Forwarding** properly on your Keenetic router. This section explains *why* it matters and *how* to do it.
 
-### 3. ⚠️Why Firewall Configuration Is Important
+### 3. ⚠️ Why Firewall Configuration Is Important
 
 * Home Assistant communicates with the router via its **web management API**
 * Exposing router services directly to the internet **without restrictions** is a security risk
 * Proper firewall rules ensure:
-
   * Only trusted devices (Home Assistant) can access the router
   * No unintended WAN access to router management services
 
@@ -103,7 +125,7 @@ Think of the firewall as a bouncer with a clipboard. Only invited guests get in.
 
 ---
 
-### 4.🔌Port Forwarding
+### 4. 🔌 Port Forwarding
 
 #### How to Configure Port Forwarding
 1. Enable UPnP if it is not
@@ -114,7 +136,7 @@ Think of the firewall as a bouncer with a clipboard. Only invited guests get in.
 | ------------- | ---------------------------------- |
 | Service       | Home Assistant Router API          |
 | Protocol      | TCP                                |
-| External Port | `100`   |
+| External Port | `100`                              |
 | Internal IP   | Router LAN IP (e.g. `192.168.1.1`) |
 | Internal Port | `79`                               |
 
@@ -124,7 +146,7 @@ Think of the firewall as a bouncer with a clipboard. Only invited guests get in.
 
 ---
 
-### 5.🛡️Firewall Rules (Recommended & Safe)
+### 5. 🛡️ Firewall Rules (Recommended & Safe)
 
 Use **Firewall rules** to restrict access.
 
@@ -157,20 +179,20 @@ Use **Firewall rules** to restrict access.
 
 ---
 
-### 1. Add the Integration
+### 6. Add the Integration
 
 Settings > Devices & Services > Add Integration > **Keenetic Router Pro**
 
-### 2. Connection Details
+### 7. Connection Details
 
 | Field    | Description        | Example       |
 | -------- | ------------------ | ------------- |
 | Host     | Router IP address  | `192.168.1.1` |
-| Port     | Web interface port | `100` |
+| Port     | Web interface port | `100`         |
 | Username | Admin username     | `admin`       |
 | Password | Admin password     | `********`    |
 
-### 3. Select Devices for Tracking and Other Device based managements
+### 8. Select Devices for Tracking and Other Device based managements
 
 During setup, you can choose which devices should be monitored via ping.
 
@@ -178,6 +200,110 @@ During setup, you can choose which devices should be monitored via ping.
 
 ## 📊 Created Entities
 
+### Main Router
+
+#### Sensors
+
+| Entity | Description | Category |
+| ------ | ----------- | -------- |
+| CPU Load | CPU usage percentage | — |
+| Memory Usage | RAM usage percentage | — |
+| Uptime | System uptime in seconds | — |
+| WAN Status | Connection state: `connected`, `link_up`, or `down` | — |
+| WAN IP | External IP address (PPPoE supported) | — |
+| PPPoE Uptime | PPPoE session uptime | — |
+| Connected Clients | Number of active clients | — |
+| Disconnected Clients | Number of inactive clients | — |
+| Extender Count | Number of detected mesh nodes | — |
+| Active Connections | NAT connection tracking (conntotal - connfree) | — |
+| Firmware Version | Current firmware with release, channel, architecture details | Diagnostic |
+| WiFi 2.4GHz Temperature | Radio module temperature | Diagnostic |
+| WiFi 5GHz Temperature | Radio module temperature | Diagnostic |
+| WiFi 2.4GHz RX / TX | Cumulative traffic in GB | Diagnostic |
+| WiFi 5GHz RX / TX | Cumulative traffic in GB | Diagnostic |
+| LAN RX / TX | Cumulative traffic in GB | Diagnostic |
+| WAN RX / TX | Cumulative traffic in GB | Diagnostic |
+| USB Storage | USB device info (if connected) | Diagnostic |
+
+#### Binary Sensors
+
+| Entity | Description |
+| ------ | ----------- |
+| Firmware Update Available | `on` when a new stable firmware is available |
+
+#### Update
+
+| Entity | Description |
+| ------ | ----------- |
+| Firmware Update | Shows current/available version, install with progress tracking |
+
+#### Switches
+
+| Entity | Description |
+| ------ | ----------- |
+| WiFi SSID (per network) | Enable/disable each WiFi network |
+| VPN Tunnel (per profile) | Enable/disable WireGuard, OpenVPN, IPsec, L2TP, PPTP |
+
+#### Select
+
+| Entity | Description |
+| ------ | ----------- |
+| Connection Policy (per tracked client) | Choose access policy: Default, VPN, Deny, etc. |
+
+#### Buttons
+
+| Entity | Description |
+| ------ | ----------- |
+| Reboot Router | Reboot the main router |
+
+#### Device Tracker
+
+| Entity | Description |
+| ------ | ----------- |
+| Client Tracker (per tracked client) | ICMP ping-based presence detection (3s interval) |
+
+---
+
+### Per Mesh Node (Extender / Repeater)
+
+Each mesh node appears as a separate device in Home Assistant with the following entities:
+
+#### Sensors
+
+| Entity | Description | Category |
+| ------ | ----------- | -------- |
+| Uptime | Node uptime in seconds | — |
+| Clients | Number of associated clients | — |
+| Firmware Version | Current firmware with hardware ID and model details | Diagnostic |
+| USB Storage | USB device info (if connected) | Diagnostic |
+| WiFi 2.4GHz RX / TX | Cumulative traffic in GB | Diagnostic |
+| WiFi 5GHz RX / TX | Cumulative traffic in GB | Diagnostic |
+| LAN RX / TX | Cumulative traffic in GB | Diagnostic |
+| WiFi 2.4GHz Temperature | Radio module temperature | Diagnostic |
+| WiFi 5GHz Temperature | Radio module temperature | Diagnostic |
+
+> **Note:** Traffic and temperature sensors are only created for interfaces that exist on the node. Not all extenders have all interfaces.
+
+#### Binary Sensors
+
+| Entity | Description |
+| ------ | ----------- |
+| Mesh Node Status | `on` when the node is connected |
+| Firmware Update Available | `on` when a new firmware is available |
+
+#### Update
+
+| Entity | Description |
+| ------ | ----------- |
+| Firmware Update | Shows current/available version (info-only, no remote install) |
+
+#### Buttons
+
+| Entity | Description |
+| ------ | ----------- |
+| Reboot | Reboot this specific mesh node |
+
+---
 
 ## 🔔 Events
 
@@ -206,8 +332,6 @@ automation:
 * `hostname`: Hostname
 * `interface`: Connected interface
 * `ssid`: WiFi SSID (if applicable)
-
----
 
 ---
 
@@ -252,6 +376,18 @@ automation:
 * Home Assistant must have permission for ICMP ping
 * Docker installations may require `network_mode: host`
 
+### WAN Status Shows `link_up` Instead of `connected`
+
+* This means the physical link is up but no IP address was assigned
+* Check your ISP connection or PPPoE credentials
+* The sensor will change to `connected` once an IP is obtained
+
+### Mesh Node Sensors Missing
+
+* Mesh diagnostics require direct RCI access to each node's IP
+* Ensure mesh nodes are connected and reachable from Home Assistant
+* Nodes using different credentials than the controller will not report diagnostics
+
 ---
 
 ## 📄 License
@@ -264,4 +400,4 @@ MIT License
   <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 60px !important;width: 217px !important;" >
 </a> 
 
-**⭐ If you like this project, don’t forget to give it a star!**
+**⭐ If you like this project, don't forget to give it a star!**
