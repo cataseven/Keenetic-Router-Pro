@@ -1,9 +1,6 @@
 """Binary sensors for Keenetic Router Pro (Mesh AP status)."""
-
 from __future__ import annotations
-
 from typing import Any
-
 from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
     BinarySensorDeviceClass,
@@ -11,10 +8,9 @@ from homeassistant.components.binary_sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
-
 from .const import DOMAIN, DATA_COORDINATOR
 from .coordinator import KeeneticCoordinator
+from .entity import MeshEntity, ControllerEntity
 
 
 async def async_setup_entry(
@@ -25,8 +21,9 @@ async def async_setup_entry(
     """Set up Keenetic Router Pro binary sensors from a config entry."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: KeeneticCoordinator = data[DATA_COORDINATOR]
-
     entities: list[BinarySensorEntity] = []
+
+    entities.append(KeeneticControllerUpdateSensor(coordinator, entry))
 
     # Mesh node'lar için binary sensor
     mesh_nodes = coordinator.data.get("mesh_nodes", [])
@@ -40,9 +37,8 @@ async def async_setup_entry(
         async_add_entities(entities)
 
 
-class KeeneticMeshNodeSensor(CoordinatorEntity, BinarySensorEntity):
+class KeeneticMeshNodeSensor(MeshEntity, BinarySensorEntity):
     """Binary sensor for mesh/extender node connectivity status."""
-
     _attr_has_entity_name = True
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
 
@@ -52,36 +48,19 @@ class KeeneticMeshNodeSensor(CoordinatorEntity, BinarySensorEntity):
         entry: ConfigEntry,
         node_cid: str,
     ) -> None:
-        super().__init__(coordinator)
-        self._entry = entry
-        self._node_cid = node_cid
-
-    @property
-    def _node(self) -> dict[str, Any] | None:
-        """Get current node data from coordinator."""
-        nodes = self.coordinator.data.get("mesh_nodes", [])
-        for node in nodes:
-            if (node.get("cid") or node.get("id")) == self._node_cid:
-                return node
-        return None
+        MeshEntity.__init__(self, coordinator, entry.entry_id, entry.title, node_cid)
 
     @property
     def unique_id(self) -> str:
-        # CID'den güvenli unique id oluştur
-        safe_cid = self._node_cid.replace("-", "").replace(":", "")[:16]
-        return f"{self._entry.entry_id}_mesh_{safe_cid}"
+        safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
+        return f"{safe_cid}_connect"
 
     @property
     def name(self) -> str:
-        node = self._node
-        if node:
-            node_name = node.get("name") or node.get("mac") or self._node_cid
-            return f"Mesh - {node_name}"
-        return f"Mesh - {self._node_cid}"
+        return f"Connected"
 
     @property
     def is_on(self) -> bool:
-        """Return True if mesh node is connected."""
         node = self._node
         if node:
             return node.get("connected", False)
@@ -89,7 +68,6 @@ class KeeneticMeshNodeSensor(CoordinatorEntity, BinarySensorEntity):
 
     @property
     def icon(self) -> str:
-        """Return icon based on node mode."""
         node = self._node
         if node:
             mode = node.get("mode", "")
@@ -119,30 +97,75 @@ class KeeneticMeshNodeSensor(CoordinatorEntity, BinarySensorEntity):
             "associations": node.get("associations"),
             "rci_errors": node.get("rci_errors"),
         }
+    
+
+class KeeneticControllerUpdateSensor(ControllerEntity, BinarySensorEntity):
+    """Binary sensor for main controller firmware update availability."""
+    
+    _attr_has_entity_name = True
+    _attr_device_class = BinarySensorDeviceClass.UPDATE
+    _attr_icon = "mdi:package-up"
+
+    def __init__(
+        self,
+        coordinator: KeeneticCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
 
     @property
-    def device_info(self) -> dict[str, Any]:
-        node = self._node
-        if node:
-            node_name = node.get("name") or node.get("mac") or self._node_cid
-            return {
-                "identifiers": {(DOMAIN, f"mesh_{self._node_cid}")},
-                "name": f"Mesh - {node_name}",
-                "manufacturer": "Keenetic",
-                "model": node.get("model") or "Extender",
-                "via_device": (DOMAIN, self._entry.entry_id),
-            }
-        # Fallback к главному устройству
-        return {
-            "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": self._entry.title,
-            "manufacturer": "Keenetic",
+    def unique_id(self) -> str:
+        return f"{self._entry_id}_controller_update"
+
+    @property
+    def name(self) -> str:
+        return "Update Available"
+
+    @property
+    def is_on(self) -> bool:
+        """Return True if firmware update is available for controller."""
+        system = self.coordinator.data.get("system", {}) or {}
+        
+        current = system.get("title") or system.get("release")
+        available = system.get("fw-available") or system.get("release-available")
+        
+        if not available or not current:
+            return False
+        
+        if available == current:
+            return False
+        
+        channel = system.get("fw-update-sandbox") or system.get("sandbox", "stable")
+        if channel != "stable":
+            return False
+        
+        return True
+
+    @property
+    def icon(self) -> str:
+        if self.is_on:
+            return "mdi:update"
+        return "mdi:check-circle"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        system = self.coordinator.data.get("system", {}) or {}
+        
+        current = system.get("title") or system.get("release")
+        available = system.get("fw-available") or system.get("release-available")
+        
+        attrs = {
+            "current_version": current,
+            "update_channel": system.get("fw-update-sandbox") or system.get("sandbox"),
         }
-
-
-class KeeneticMeshUpdateSensor(CoordinatorEntity, BinarySensorEntity):
+        
+        if available:
+            attrs["available_version"] = available
+        
+        return attrs
+    
+class KeeneticMeshUpdateSensor(MeshEntity, BinarySensorEntity):
     """Binary sensor for mesh/extender firmware update availability."""
-
     _attr_has_entity_name = True
     _attr_device_class = BinarySensorDeviceClass.UPDATE
 
@@ -152,35 +175,19 @@ class KeeneticMeshUpdateSensor(CoordinatorEntity, BinarySensorEntity):
         entry: ConfigEntry,
         node_cid: str,
     ) -> None:
-        super().__init__(coordinator)
-        self._entry = entry
-        self._node_cid = node_cid
-
-    @property
-    def _node(self) -> dict[str, Any] | None:
-        """Get current node data from coordinator."""
-        nodes = self.coordinator.data.get("mesh_nodes", [])
-        for node in nodes:
-            if (node.get("cid") or node.get("id")) == self._node_cid:
-                return node
-        return None
+        MeshEntity.__init__(self, coordinator, entry.entry_id, entry.title, node_cid)
 
     @property
     def unique_id(self) -> str:
         safe_cid = self._node_cid.replace("-", "").replace(":", "")[:16]
-        return f"{self._entry.entry_id}_mesh_{safe_cid}_update"
+        return f"{self._entry_id}_mesh_{safe_cid}_update"
 
     @property
     def name(self) -> str:
-        node = self._node
-        if node:
-            node_name = node.get("name") or node.get("mac") or self._node_cid
-            return f"Mesh - {node_name} Update Available"
-        return f"Mesh - {self._node_cid} Update Available"
+        return f"Update Available"
 
     @property
     def is_on(self) -> bool:
-        """Return True if firmware update is available."""
         node = self._node
         if node:
             current = node.get("firmware")
@@ -200,28 +207,9 @@ class KeeneticMeshUpdateSensor(CoordinatorEntity, BinarySensorEntity):
         node = self._node
         if not node:
             return None
-
         return {
             "cid": self._node_cid,
             "model": node.get("model"),
             "current_version": node.get("firmware"),
             "available_version": node.get("firmware_available"),
-        }
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        node = self._node
-        if node:
-            node_name = node.get("name") or node.get("mac") or self._node_cid
-            return {
-                "identifiers": {(DOMAIN, f"mesh_{self._node_cid}")},
-                "name": f"Mesh - {node_name}",
-                "manufacturer": "Keenetic",
-                "model": node.get("model") or "Extender",
-                "via_device": (DOMAIN, self._entry.entry_id),
-            }
-        return {
-            "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": self._entry.title,
-            "manufacturer": "Keenetic",
         }

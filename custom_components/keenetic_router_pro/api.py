@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Optional, Dict, List
+from homeassistant.exceptions import HomeAssistantError
 
 import aiohttp
 import async_timeout
@@ -253,6 +254,11 @@ class KeeneticClient:
     async def async_get_system_info(self) -> Dict[str, Any]:
         """Return basic system info: hostname, version, cpu, memory, uptime, etc."""
         data = await self._rci_get("show/system")
+        return data or {}
+    
+    async def async_get_version_info(self) -> Dict[str, Any]:
+        """Return version info"""
+        data = await self._rci_get("show/version")
         return data or {}
 
     async def async_get_interfaces(self) -> Dict[str, Any]:
@@ -924,10 +930,6 @@ class KeeneticClient:
 
         return devices
 
-    # -------------------------------------------------------------------------
-    # Traffic Statistics
-    # -------------------------------------------------------------------------
-
     async def async_get_traffic_stats(
         self, interfaces: Dict[str, Any] | None = None
     ) -> Dict[str, Any]:
@@ -946,9 +948,9 @@ class KeeneticClient:
         try:
             if interfaces is None:
                 interfaces = await self.async_get_interfaces()
+            
             iface_list = self._normalize_interfaces(interfaces)
-
-            WAN_KEYWORDS = ("wan", "internet", "pppoe", "isp")
+            WAN_KEYWORDS = ("wan", "internet", "pppoe", "isp", "provider")
 
             for iface in iface_list:
                 name_fields = [
@@ -963,21 +965,84 @@ class KeeneticClient:
                 state = str(iface.get("state") or "").lower()
 
                 if state == "up" and any(k in name_joined for k in WAN_KEYWORDS):
-                    # Traffic counters
-                    stats["total_rx"] = iface.get("rxbytes") or iface.get("rx-bytes") or 0
-                    stats["total_tx"] = iface.get("txbytes") or iface.get("tx-bytes") or 0
+                    stats["total_rx"] = (
+                        iface.get("rxbytes") or 
+                        iface.get("rx-bytes") or 
+                        iface.get("bytes-rx") or 
+                        iface.get("rx") or 
+                        0
+                    )
+                    stats["total_tx"] = (
+                        iface.get("txbytes") or 
+                        iface.get("tx-bytes") or 
+                        iface.get("bytes-tx") or 
+                        iface.get("tx") or 
+                        0
+                    )
+
+                    rx_speed = (
+                        iface.get("rx-speed") or 
+                        iface.get("rxspeed") or 
+                        iface.get("speed-rx") or 
+                        iface.get("rx_rate") or 
+                        0
+                    )
+                    tx_speed = (
+                        iface.get("tx-speed") or 
+                        iface.get("txspeed") or 
+                        iface.get("speed-tx") or 
+                        iface.get("tx_rate") or 
+                        0
+                    )
                     
-                    # Speed (bits per second -> MB/s)
-                    rx_speed = iface.get("rx-speed") or iface.get("rxspeed") or 0
-                    tx_speed = iface.get("tx-speed") or iface.get("txspeed") or 0
                     stats["download_speed"] = round(float(rx_speed) / 8 / 1024 / 1024, 2)
                     stats["upload_speed"] = round(float(tx_speed) / 8 / 1024 / 1024, 2)
+                    
+                    _LOGGER.debug(
+                        "Traffic stats for %s: rx=%s, tx=%s, rx_speed=%s, tx_speed=%s",
+                        name_joined, stats["total_rx"], stats["total_tx"],
+                        stats["download_speed"], stats["upload_speed"]
+                    )
                     break
 
         except Exception as err:
             _LOGGER.debug("Error getting traffic stats: %s", err)
 
         return stats
+
+    async def async_get_all_interface_stats(self) -> Dict[str, Dict[str, Any]]:
+        """Get traffic statistics for all interfaces.
+        
+        Returns dict mapping interface name to stats (rxbytes, txbytes, etc.)
+        """
+        interfaces = await self.async_get_interfaces()
+        iface_list = self._normalize_interfaces(interfaces)
+        
+        all_stats: Dict[str, Dict[str, Any]] = {}
+        
+        for iface in iface_list:
+            iface_name = iface.get("id") or iface.get("interface-name")
+            if not iface_name:
+                continue
+            
+            # Пропускаем внутренние интерфейсы (Bridge, Vlan, AccessPoint)
+            iface_type = iface.get("type", "").lower()
+            if iface_type in ("bridge", "vlan", "accesspoint"):
+                continue
+            
+            try:
+                stats = await self.async_get_interface_stat(iface_name)
+                if stats:
+                    # Добавляем информацию об интерфейсе
+                    stats["interface_name"] = iface_name
+                    stats["interface_type"] = iface_type
+                    stats["link"] = iface.get("link")
+                    stats["state"] = iface.get("state")
+                    all_stats[iface_name] = stats
+            except Exception as err:
+                _LOGGER.debug("Failed to get stats for %s: %s", iface_name, err)
+        
+        return all_stats
 
     async def async_get_usb_storage(self) -> List[Dict[str, Any]]:
         """Get USB storage devices information.
@@ -1357,3 +1422,74 @@ class KeeneticClient:
     async def async_unblock_client(self, mac: str) -> None:
         """Unblock a client's internet access."""
         await self.async_set_client_policy(mac, "default")
+
+    async def async_check_firmware_update(self) -> Dict[str, Any]:
+        """Check for available firmware update via /rci/show/version."""
+        try:
+            data = await self._rci_get("show/version")
+            if not data:
+                return {}
+            
+            current = data.get("title") or data.get("release")
+            available = data.get("fw-available") or data.get("release-available")
+            
+            # Проверяем, есть ли обновление (только stable канал)
+            has_update = (
+                current and available and 
+                current != available and
+                data.get("fw-update-sandbox") == "stable"
+            )
+            
+            return {
+                "current": {
+                    "title": current,
+                    "release": data.get("release"),
+                },
+                "available": {
+                    "title": available,
+                    "release": data.get("release-available"),
+                } if has_update else None,
+                "channel": data.get("fw-update-sandbox"),
+                "has_update": has_update,
+            }
+        except Exception as err:
+            _LOGGER.debug("Error checking firmware update: %s", err)
+            return {}
+
+
+    async def async_start_firmware_update(self) -> bool:
+        """Start firmware update process via /rci/system/update."""
+        try:
+            result = await self._rci_post("system/update", {"confirm": True})
+            
+            if isinstance(result, dict):
+                status = result.get("status") or result.get("result")
+                if status in ("started", "ok", True, "accepted"):
+                    _LOGGER.info("Firmware update started")
+                    return True
+
+            return result is not None
+            
+        except Exception as err:
+            _LOGGER.error("Error starting firmware update: %s", err)
+            raise HomeAssistantError(f"Failed to start update: {err}")
+
+
+    async def async_get_update_progress(self) -> Dict[str, Any]:
+        """Get current update progress (if in progress).
+        
+        Returns progress info or empty dict if no update running.
+        """
+        try:
+            data = await self._rci_get("system/update/status")
+            if not data or not isinstance(data, dict):
+                return {}
+            
+            return {
+                "in_progress": data.get("in-progress", False),
+                "progress_percent": data.get("progress", 0),
+                "stage": data.get("stage"),
+                "eta_seconds": data.get("eta"),
+            }
+        except Exception:
+            return {}

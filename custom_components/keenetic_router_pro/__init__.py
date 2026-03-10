@@ -24,7 +24,7 @@ from .coordinator import KeeneticCoordinator, KeeneticPingCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[str] = ["sensor", "switch", "device_tracker", "button", "binary_sensor", "select"]
+PLATFORMS: list[str] = ["sensor", "switch", "device_tracker", "button", "binary_sensor", "select", "update"]
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
