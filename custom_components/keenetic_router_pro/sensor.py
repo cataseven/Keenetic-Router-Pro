@@ -496,10 +496,6 @@ class KeeneticActiveConnectionsSensor(ControllerEntity, SensorEntity):
         return "Active Connections"
 
     @property
-    def native_unit_of_measurement(self) -> str:
-        return "conn"
-
-    @property
     def native_value(self) -> int:
         sys = self.coordinator.data.get("system", {}) or {}
         conntotal = sys.get("conntotal", 0)
