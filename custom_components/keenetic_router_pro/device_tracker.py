@@ -85,6 +85,12 @@ class KeeneticClientTracker(ControllerEntity, ScannerEntity):
                 self._handle_coordinator_update
             )
         )
+        # Ping coordinator'ı da dinle — her ping cycle'da state güncellensin
+        self.async_on_remove(
+            self._ping_coordinator.async_add_listener(
+                self._handle_ping_update
+            )
+        )
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -94,6 +100,11 @@ class KeeneticClientTracker(ControllerEntity, ScannerEntity):
             if ip:
                 self._ping_coordinator.update_client_ip(self._mac, str(ip))
         
+        self.async_write_ha_state()
+
+    @callback
+    def _handle_ping_update(self) -> None:
+        """Ping coordinator güncellendiğinde state'i yaz."""
         self.async_write_ha_state()
 
     @property
