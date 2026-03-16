@@ -18,8 +18,12 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+import logging
+
 from .api import KeeneticClient, KeeneticAuthError, KeeneticApiError
 from .const import DOMAIN, DEFAULT_PORT, DEFAULT_SSL, CONF_TRACKED_CLIENTS, CONF_USE_CHALLENGE_AUTH
+
+_LOGGER = logging.getLogger(f"custom_components.{DOMAIN}.config_flow")
 
 
 STEP_USER_DATA_SCHEMA = vol.Schema(
@@ -82,11 +86,14 @@ class KeeneticRouterProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             try:
                 info = await _async_validate_input(self.hass, user_input)
-            except KeeneticAuthError:
+            except KeeneticAuthError as err:
+                _LOGGER.error("Authentication failed: %s", err)
                 errors["base"] = "invalid_auth"
-            except KeeneticApiError:
+            except KeeneticApiError as err:
+                _LOGGER.error("API/connection error: %s", err)
                 errors["base"] = "cannot_connect"
-            except Exception:  # pylint: disable=broad-except
+            except Exception as err:  # pylint: disable=broad-except
+                _LOGGER.exception("Unexpected error during setup: %s", err)
                 errors["base"] = "unknown"
             else:
                 # Aynı host'tan bir tane olsun

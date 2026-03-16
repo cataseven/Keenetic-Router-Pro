@@ -110,24 +110,34 @@ class KeeneticClient:
         """Perform NDW2 challenge-response auth (used by newer Keenetic models).
 
         Flow:
-          1. GET /auth  -> 401 with X-NDM-Challenge header + session cookie
+          1. GET /auth  -> 401 with X-NDM-Challenge header + Set-Cookie
           2. Compute md5(md5(password) + challenge)
-          3. POST /auth with {"login": ..., "password": <computed>}
-          4. On 200 -> session cookie is valid for subsequent requests
+          3. POST /auth with {"login": ..., "password": <computed>} + Cookie header
+          4. On 200 -> store cookie in _auth_header for all subsequent requests
+
+        NOTE: HA's shared session uses CookieJar(unsafe=False) which silently drops
+        cookies from bare IP addresses. We therefore extract and send the session
+        cookie manually via an explicit Cookie header.
         """
         if self._session is None:
             raise KeeneticAuthError("ClientSession is not set")
 
         auth_url = f"{self._base}/auth"
 
-        _LOGGER.debug("Authenticating to Keenetic (NDW2 challenge) via %s", auth_url)
+        _LOGGER.debug("NDW2 challenge: GET %s", auth_url)
 
-        # Step 1: GET /auth to obtain the challenge and session cookie
+        # Step 1: GET /auth — obtain challenge + session cookie
         try:
             async with async_timeout.timeout(self._request_timeout):
                 resp = await self._session.get(auth_url, allow_redirects=False)
         except aiohttp.ClientError as err:
             raise KeeneticAuthError(f"Challenge GET failed: {err}") from err
+
+        _LOGGER.debug(
+            "NDW2 challenge GET response: status=%s headers=%s",
+            resp.status,
+            dict(resp.headers),
+        )
 
         if resp.status not in (200, 401):
             text = await resp.text()
@@ -138,40 +148,72 @@ class KeeneticClient:
         challenge = resp.headers.get("X-NDM-Challenge")
         if not challenge:
             raise KeeneticAuthError(
-                "Router did not return X-NDM-Challenge header; "
-                "try disabling 'Challenge Auth' and use Basic Auth instead."
+                "Router did not return X-NDM-Challenge header "
+                f"(status={resp.status}). "
+                "Try disabling 'Challenge Auth' and use Basic Auth instead."
             )
+        _LOGGER.debug("NDW2 challenge value: %s", challenge)
 
-        # Step 2: compute the response hash
+        # Manually extract the session cookie — HA's shared CookieJar(unsafe=False)
+        # silently ignores cookies from IP addresses, so we can't rely on it.
+        session_cookie: str | None = None
+        raw_set_cookie = resp.headers.get("Set-Cookie", "")
+        if raw_set_cookie:
+            # "NCWRGZAHQ=BGDPQGIPBVLWREUW; Path=/; SameSite=Strict; Max-Age=300"
+            cookie_kv = raw_set_cookie.split(";")[0].strip()
+            if "=" in cookie_kv:
+                session_cookie = cookie_kv
+        _LOGGER.debug("NDW2 session cookie extracted: %s", session_cookie)
+
+        # Step 2: compute md5(md5(password) + challenge)
         password_md5 = hashlib.md5(self._password.encode()).hexdigest()
         response_hash = hashlib.md5((password_md5 + challenge).encode()).hexdigest()
+        _LOGGER.debug("NDW2 response hash computed (password_md5=%s)", password_md5)
 
-        # Step 3: POST /auth with computed credentials (session cookie sent automatically)
+        # Step 3: POST /auth with explicit Cookie header
         payload = {"login": self._username, "password": response_hash}
+        post_headers: Dict[str, str] = {}
+        if session_cookie:
+            post_headers["Cookie"] = session_cookie
+
+        _LOGGER.debug(
+            "NDW2 challenge: POST %s payload_login=%s cookie_present=%s",
+            auth_url,
+            self._username,
+            bool(session_cookie),
+        )
+
         try:
             async with async_timeout.timeout(self._request_timeout):
-                post_resp = await self._session.post(auth_url, json=payload)
+                post_resp = await self._session.post(
+                    auth_url, json=payload, headers=post_headers
+                )
         except aiohttp.ClientError as err:
             raise KeeneticAuthError(f"Challenge POST failed: {err}") from err
 
+        post_text = await post_resp.text()
+        _LOGGER.debug(
+            "NDW2 challenge POST response: status=%s body=%s",
+            post_resp.status,
+            post_text,
+        )
+
         if post_resp.status == 401:
-            text = await post_resp.text()
             raise KeeneticAuthError(
-                f"Challenge auth rejected (wrong credentials?): {text}"
+                f"Challenge auth rejected — wrong credentials? "
+                f"(status=401, body={post_text!r})"
             )
 
         if post_resp.status != 200:
-            text = await post_resp.text()
             raise KeeneticAuthError(
-                f"Challenge auth failed (status {post_resp.status}): {text}"
+                f"Challenge auth failed (status={post_resp.status}, body={post_text!r})"
             )
 
-        # In challenge mode we don't use an Authorization header;
-        # the session cookie is stored in the shared cookie jar automatically.
-        self._auth_header = {}
+        # Store cookie in _auth_header so every subsequent request includes it.
+        self._auth_header = {"Cookie": session_cookie} if session_cookie else {}
         self._authenticated = True
         _LOGGER.debug(
-            "Authenticated to Keenetic router at %s:%s (NDW2 challenge)",
+            "Authenticated to Keenetic router at %s:%s (NDW2 challenge OK)",
             self._host,
             self._port,
         )
