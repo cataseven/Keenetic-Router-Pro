@@ -110,9 +110,10 @@ class KeeneticClient:
         """Perform NDW2 challenge-response auth (used by newer Keenetic models).
 
         Flow:
-          1. GET /auth  -> 401 with X-NDM-Challenge header + Set-Cookie
-          2. Compute md5(md5(password) + challenge)
-          3. POST /auth with {"login": ..., "password": <computed>} + Cookie header
+          1. GET /auth  -> 401 with X-NDM-Challenge + X-NDM-Realm headers + Set-Cookie
+          2. ha1 = md5(username + ":" + realm + ":" + password)
+             response = sha256(ha1 + challenge)
+          3. POST /auth with {"login": ..., "password": <response>} + Cookie header
           4. On 200 -> store cookie in _auth_header for all subsequent requests
 
         NOTE: HA's shared session uses CookieJar(unsafe=False) which silently drops
@@ -146,16 +147,17 @@ class KeeneticClient:
             )
 
         challenge = resp.headers.get("X-NDM-Challenge")
+        realm = resp.headers.get("X-NDM-Realm", "")
         if not challenge:
             raise KeeneticAuthError(
                 "Router did not return X-NDM-Challenge header "
                 f"(status={resp.status}). "
                 "Try disabling 'Challenge Auth' and use Basic Auth instead."
             )
-        _LOGGER.debug("NDW2 challenge value: %s", challenge)
+        _LOGGER.debug("NDW2 challenge=%s realm=%s", challenge, realm)
 
         # Manually extract the session cookie — HA's shared CookieJar(unsafe=False)
-        # silently ignores cookies from IP addresses, so we can't rely on it.
+        # silently ignores cookies from bare IP addresses, so we manage it manually.
         session_cookie: str | None = None
         raw_set_cookie = resp.headers.get("Set-Cookie", "")
         if raw_set_cookie:
@@ -165,10 +167,16 @@ class KeeneticClient:
                 session_cookie = cookie_kv
         _LOGGER.debug("NDW2 session cookie extracted: %s", session_cookie)
 
-        # Step 2: compute md5(md5(password) + challenge)
-        password_md5 = hashlib.md5(self._password.encode()).hexdigest()
-        response_hash = hashlib.md5((password_md5 + challenge).encode()).hexdigest()
-        _LOGGER.debug("NDW2 response hash computed (password_md5=%s)", password_md5)
+        # Step 2: NDW2 hash — matches Keenetic NDM2 spec:
+        #   ha1          = md5(username + ":" + realm + ":" + password)
+        #   response     = sha256(ha1 + challenge)
+        ha1 = hashlib.md5(
+            f"{self._username}:{realm}:{self._password}".encode()
+        ).hexdigest()
+        response_hash = hashlib.sha256((ha1 + challenge).encode()).hexdigest()
+        _LOGGER.debug(
+            "NDW2 hash: ha1(md5)=%s response(sha256)=%s", ha1, response_hash
+        )
 
         # Step 3: POST /auth with explicit Cookie header
         payload = {"login": self._username, "password": response_hash}
