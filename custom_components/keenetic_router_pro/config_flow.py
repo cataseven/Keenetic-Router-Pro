@@ -19,7 +19,7 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import KeeneticClient, KeeneticAuthError, KeeneticApiError
-from .const import DOMAIN, DEFAULT_PORT, DEFAULT_SSL, CONF_TRACKED_CLIENTS
+from .const import DOMAIN, DEFAULT_PORT, DEFAULT_SSL, CONF_TRACKED_CLIENTS, CONF_USE_CHALLENGE_AUTH
 
 
 STEP_USER_DATA_SCHEMA = vol.Schema(
@@ -29,6 +29,7 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Required(CONF_USERNAME, default="admin"): str,
         vol.Required(CONF_PASSWORD): str,
         vol.Optional(CONF_SSL, default=DEFAULT_SSL): bool,
+        vol.Optional(CONF_USE_CHALLENGE_AUTH, default=False): bool,
     }
 )
 
@@ -42,6 +43,7 @@ async def _async_validate_input(hass: HomeAssistant, data: dict[str, Any]) -> di
         password=data[CONF_PASSWORD],
         port=data[CONF_PORT],
         ssl=data[CONF_SSL],
+        use_challenge_auth=data.get(CONF_USE_CHALLENGE_AUTH, False),
     )
 
     # Auth + basit system info testi
@@ -280,6 +282,7 @@ class KeeneticOptionsFlow(config_entries.OptionsFlow):
             password=data["password"],
             port=int(data.get("port", DEFAULT_PORT)),
             ssl=bool(data.get("ssl", DEFAULT_SSL)),
+            use_challenge_auth=bool(data.get(CONF_USE_CHALLENGE_AUTH, False)),
         )
 
         try:

@@ -9,6 +9,7 @@ import aiohttp
 import async_timeout
 import asyncio
 import base64
+import hashlib
 import logging
 
 from .const import DOMAIN
@@ -36,6 +37,7 @@ class KeeneticClient:
         port: int = 100,
         ssl: bool = False,
         request_timeout: int = 15,
+        use_challenge_auth: bool = False,
     ) -> None:
         self._host = host
         self._username = username
@@ -43,6 +45,7 @@ class KeeneticClient:
         self._port = port
         self._ssl = ssl
         self._request_timeout = request_timeout
+        self._use_challenge_auth = use_challenge_auth
 
         scheme = "https" if ssl else "http"
         self._base = f"{scheme}://{host}:{port}"
@@ -64,6 +67,13 @@ class KeeneticClient:
         await self._async_authenticate()
 
     async def _async_authenticate(self) -> None:
+        """Dispatch to the appropriate auth method."""
+        if self._use_challenge_auth:
+            await self._async_authenticate_challenge()
+        else:
+            await self._async_authenticate_basic()
+
+    async def _async_authenticate_basic(self) -> None:
         """Perform Basic auth against /rci/, like original ha_keenetic."""
         if self._session is None:
             raise KeeneticAuthError("ClientSession is not set")
@@ -74,7 +84,7 @@ class KeeneticClient:
         headers = {"Authorization": f"Basic {auth_string}"}
         url = f"{self._base}{RCI_ROOT}/"
 
-        _LOGGER.debug("Authenticating to Keenetic via %s", url)
+        _LOGGER.debug("Authenticating to Keenetic (Basic) via %s", url)
 
         try:
             async with async_timeout.timeout(self._request_timeout):
@@ -91,7 +101,77 @@ class KeeneticClient:
         self._auth_header = headers
         self._authenticated = True
         _LOGGER.debug(
-            "Authenticated to Keenetic router at %s:%s",
+            "Authenticated to Keenetic router at %s:%s (Basic)",
+            self._host,
+            self._port,
+        )
+
+    async def _async_authenticate_challenge(self) -> None:
+        """Perform NDW2 challenge-response auth (used by newer Keenetic models).
+
+        Flow:
+          1. GET /auth  -> 401 with X-NDM-Challenge header + session cookie
+          2. Compute md5(md5(password) + challenge)
+          3. POST /auth with {"login": ..., "password": <computed>}
+          4. On 200 -> session cookie is valid for subsequent requests
+        """
+        if self._session is None:
+            raise KeeneticAuthError("ClientSession is not set")
+
+        auth_url = f"{self._base}/auth"
+
+        _LOGGER.debug("Authenticating to Keenetic (NDW2 challenge) via %s", auth_url)
+
+        # Step 1: GET /auth to obtain the challenge and session cookie
+        try:
+            async with async_timeout.timeout(self._request_timeout):
+                resp = await self._session.get(auth_url, allow_redirects=False)
+        except aiohttp.ClientError as err:
+            raise KeeneticAuthError(f"Challenge GET failed: {err}") from err
+
+        if resp.status not in (200, 401):
+            text = await resp.text()
+            raise KeeneticAuthError(
+                f"Unexpected status during challenge GET ({resp.status}): {text}"
+            )
+
+        challenge = resp.headers.get("X-NDM-Challenge")
+        if not challenge:
+            raise KeeneticAuthError(
+                "Router did not return X-NDM-Challenge header; "
+                "try disabling 'Challenge Auth' and use Basic Auth instead."
+            )
+
+        # Step 2: compute the response hash
+        password_md5 = hashlib.md5(self._password.encode()).hexdigest()
+        response_hash = hashlib.md5((password_md5 + challenge).encode()).hexdigest()
+
+        # Step 3: POST /auth with computed credentials (session cookie sent automatically)
+        payload = {"login": self._username, "password": response_hash}
+        try:
+            async with async_timeout.timeout(self._request_timeout):
+                post_resp = await self._session.post(auth_url, json=payload)
+        except aiohttp.ClientError as err:
+            raise KeeneticAuthError(f"Challenge POST failed: {err}") from err
+
+        if post_resp.status == 401:
+            text = await post_resp.text()
+            raise KeeneticAuthError(
+                f"Challenge auth rejected (wrong credentials?): {text}"
+            )
+
+        if post_resp.status != 200:
+            text = await post_resp.text()
+            raise KeeneticAuthError(
+                f"Challenge auth failed (status {post_resp.status}): {text}"
+            )
+
+        # In challenge mode we don't use an Authorization header;
+        # the session cookie is stored in the shared cookie jar automatically.
+        self._auth_header = {}
+        self._authenticated = True
+        _LOGGER.debug(
+            "Authenticated to Keenetic router at %s:%s (NDW2 challenge)",
             self._host,
             self._port,
         )
@@ -139,12 +219,28 @@ class KeeneticClient:
         except aiohttp.ClientError as err:
             raise KeeneticApiError(f"Connection error: {err}") from err
 
-        # Basic auth hatalıysa yine 401 alırız
+        # 401 means session expired; re-auth once and retry
         if resp.status == 401:
-            text = await resp.text()
-            _LOGGER.error("Keenetic Basic auth rejected: %s", text)
+            _LOGGER.debug("Got 401 on %s, re-authenticating...", path)
             self._authenticated = False
-            raise KeeneticAuthError(f"Basic auth rejected: {text}")
+            await self._async_authenticate()
+
+            try:
+                async with async_timeout.timeout(self._request_timeout):
+                    resp = await self._session.request(
+                        method,
+                        url,
+                        params=params,
+                        json=json,
+                        headers=dict(self._auth_header or {}),
+                    )
+            except aiohttp.ClientError as err:
+                raise KeeneticApiError(f"Connection error after re-auth: {err}") from err
+
+            if resp.status == 401:
+                text = await resp.text()
+                self._authenticated = False
+                raise KeeneticAuthError(f"Auth rejected after re-auth: {text}")
 
         if resp.status >= 400:
             text = await resp.text()

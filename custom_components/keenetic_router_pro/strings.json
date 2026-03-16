@@ -9,7 +9,8 @@
           "port": "Port",
           "username": "Username",
           "password": "Password",
-          "ssl": "Use SSL"
+          "ssl": "Use SSL",
+          "use_challenge_auth": "Use Challenge Auth (NDW2, required for newer models like Hero)"
         }
       },
       "select_clients": {
