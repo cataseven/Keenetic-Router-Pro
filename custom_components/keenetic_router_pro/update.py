@@ -21,7 +21,7 @@ from .entity import ControllerEntity, MeshEntity
 
 _LOGGER = logging.getLogger(__name__)
 
-KEENETIC_RELEASE_NOTES_URL = "https://help.keenetic.com/hc/en-us/sections/115001944269"
+KEENETIC_RELEASE_NOTES_URL = "https://help.keenetic.com/hc/en-us/categories/360000400920-KeeneticOS-Release-Notes"
 
 
 async def async_setup_entry(

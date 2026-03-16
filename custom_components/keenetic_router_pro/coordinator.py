@@ -122,7 +122,7 @@ class KeeneticPingCoordinator(DataUpdateCoordinator[dict[str, bool]]):
     """
 
     # Ping configuration
-    PING_COUNT = 3          # Gönderilecek ping sayısı
+    PING_COUNT = 1          # Gönderilecek ping sayısı (hızlı döngü için 1 yeterli)
     PING_TIMEOUT = 1        # Her ping için timeout (saniye)
     PING_PRIVILEGED = False # Unprivileged mode (root gerektirmez)
 

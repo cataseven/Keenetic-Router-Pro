@@ -201,6 +201,7 @@ class KeeneticUptimeSensor(ControllerEntity, SensorEntity):
     """Router uptime sensörü."""
     _attr_has_entity_name = True
     _attr_translation_key = "uptime"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
         ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
@@ -298,6 +299,7 @@ class KeeneticWanStatusSensor(ControllerEntity, SensorEntity):
 
 class _BaseWgSensor(ControllerEntity, SensorEntity):
     """WireGuard ortak mantığı."""
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry, wg_name: str) -> None:
         ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
@@ -449,6 +451,7 @@ class KeeneticPppoeUptimeSensor(ControllerEntity, SensorEntity):
     _attr_has_entity_name = True
     _attr_translation_key = "pppoe_uptime"
     _attr_icon = "mdi:timer-outline"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
         ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
@@ -505,10 +508,6 @@ class KeeneticActiveConnectionsSensor(ControllerEntity, SensorEntity):
         return "Active Connections"
 
     @property
-    def native_unit_of_measurement(self) -> str:
-        return "conn"
-
-    @property
     def native_value(self) -> int:
         sys = self.coordinator.data.get("system", {}) or {}
         conntotal = sys.get("conntotal", 0)
@@ -557,10 +556,6 @@ class KeeneticConnectedClientsSensor(ControllerEntity, SensorEntity):
         return stats.get("connected", 0)
 
     @property
-    def native_unit_of_measurement(self) -> str:
-        return "conn"
-
-    @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         stats = self.coordinator.data.get("client_stats", {})
         return {
@@ -590,10 +585,6 @@ class KeeneticDisconnectedClientsSensor(ControllerEntity, SensorEntity):
     def native_value(self) -> int:
         stats = self.coordinator.data.get("client_stats", {})
         return stats.get("disconnected", 0)
-
-    @property
-    def native_unit_of_measurement(self) -> str:
-        return "conn"
 
 
 class KeeneticExtenderCountSensor(ControllerEntity, SensorEntity):
@@ -810,6 +801,7 @@ class KeeneticMeshUptimeSensor(MeshEntity, SensorEntity):
     _attr_has_entity_name = True
     _attr_translation_key = "mesh_uptime"
     _attr_icon = "mdi:timer-outline"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry, node_cid: str) -> None:
         MeshEntity.__init__(self, coordinator, entry.entry_id, entry.title, node_cid)
