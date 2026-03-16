@@ -18,6 +18,7 @@ from .const import (
     DATA_COORDINATOR,
     DATA_PING_COORDINATOR,
     CONF_TRACKED_CLIENTS,
+    CONF_USE_CHALLENGE_AUTH,
     EVENT_NEW_DEVICE,
 )
 from .coordinator import KeeneticCoordinator, KeeneticPingCoordinator
@@ -48,6 +49,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         password=password,
         port=port,
         ssl=use_ssl,
+        use_challenge_auth=bool(data.get(CONF_USE_CHALLENGE_AUTH, False)),
     )
     await client.async_start(session)
 
