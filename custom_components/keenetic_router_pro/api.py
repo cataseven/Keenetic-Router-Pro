@@ -167,13 +167,13 @@ class KeeneticClient:
                 session_cookie = cookie_kv
         _LOGGER.debug("NDW2 session cookie extracted: %s", session_cookie)
 
-        # Step 2: NDW2 hash — matches Keenetic NDM2 spec:
-        #   ha1          = md5(username + ":" + realm + ":" + password)
-        #   response     = sha256(ha1 + challenge)
+        # Step 2: NDW2 hash — from Keenetic web app JS source:
+        #   c    = md5(username + ":" + realm + ":" + password)
+        #   hash = sha256(challenge + c)   ← challenge comes FIRST
         ha1 = hashlib.md5(
             f"{self._username}:{realm}:{self._password}".encode()
         ).hexdigest()
-        response_hash = hashlib.sha256((ha1 + challenge).encode()).hexdigest()
+        response_hash = hashlib.sha256((challenge + ha1).encode()).hexdigest()
         _LOGGER.debug(
             "NDW2 hash: ha1(md5)=%s response(sha256)=%s", ha1, response_hash
         )
