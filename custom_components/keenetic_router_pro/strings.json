@@ -9,7 +9,8 @@
           "port": "Port",
           "username": "Username",
           "password": "Password",
-          "ssl": "Use SSL"
+          "ssl": "Use SSL",
+          "auth_type": "Auth type (ndms2 — new firmware, basic — old firmware)"
         }
       },
       "select_clients": {

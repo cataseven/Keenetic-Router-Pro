@@ -1,7 +1,12 @@
 """Constants for the Keenetic Router Pro integration."""
 
 DOMAIN = "keenetic_router_pro"
-DEFAULT_PORT = 100
+DEFAULT_PORT = 80
+
+CONF_AUTH_TYPE = "auth_type"
+AUTH_TYPE_NDMS2 = "ndms2"
+AUTH_TYPE_BASIC = "basic"
+DEFAULT_AUTH_TYPE = AUTH_TYPE_NDMS2
 DEFAULT_SSL = False
 FAST_SCAN_INTERVAL = 10
 SLOW_SCAN_INTERVAL = 60

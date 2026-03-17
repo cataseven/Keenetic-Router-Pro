@@ -14,6 +14,8 @@ from .const import (
     DOMAIN,
     DEFAULT_PORT,
     DEFAULT_SSL,
+    DEFAULT_AUTH_TYPE,
+    CONF_AUTH_TYPE,
     DATA_CLIENT,
     DATA_COORDINATOR,
     DATA_PING_COORDINATOR,
@@ -42,12 +44,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     session = async_get_clientsession(hass)
 
+    auth_type: str = data.get(CONF_AUTH_TYPE, DEFAULT_AUTH_TYPE)
+
     client = KeeneticClient(
         host=host,
         username=username,
         password=password,
         port=port,
         ssl=use_ssl,
+        auth_type=auth_type,
     )
     await client.async_start(session)
 

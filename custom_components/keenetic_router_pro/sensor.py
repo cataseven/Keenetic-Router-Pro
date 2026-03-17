@@ -39,6 +39,8 @@ async def async_setup_entry(
     entities.append(KeeneticExtenderCountSensor(coordinator, entry))
     entities.append(KeeneticPppoeUptimeSensor(coordinator, entry))
     entities.append(KeeneticActiveConnectionsSensor(coordinator, entry))
+    entities.append(KeeneticDownloadSpeedSensor(coordinator, entry))
+    entities.append(KeeneticUploadSpeedSensor(coordinator, entry))
     
     mesh_nodes = coordinator.data.get("mesh_nodes", [])
     for node in mesh_nodes:

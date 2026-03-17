@@ -1,4 +1,4 @@
-"""Low-level async API client for Keenetic Router Pro integration (Basic Auth to /rci)."""
+"""Low-level async API client for Keenetic Router Pro integration."""
 
 from __future__ import annotations
 
@@ -8,9 +8,10 @@ import aiohttp
 import async_timeout
 import asyncio
 import base64
+import hashlib
 import logging
 
-from .const import DOMAIN
+from .const import DOMAIN, AUTH_TYPE_NDMS2, AUTH_TYPE_BASIC
 
 _LOGGER = logging.getLogger(f"custom_components.{DOMAIN}.api")
 
@@ -34,6 +35,7 @@ class KeeneticClient:
         password: str,
         port: int = 100,
         ssl: bool = False,
+        auth_type: str = AUTH_TYPE_NDMS2,
         request_timeout: int = 15,
     ) -> None:
         self._host = host
@@ -41,14 +43,18 @@ class KeeneticClient:
         self._password = password
         self._port = port
         self._ssl = ssl
+        self._auth_type = auth_type
         self._request_timeout = request_timeout
 
         scheme = "https" if ssl else "http"
         self._base = f"{scheme}://{host}:{port}"
 
         self._session: Optional[aiohttp.ClientSession] = None
-        self._auth_header: Optional[Dict[str, str]] = None
         self._authenticated: bool = False
+        # Basic Auth: passed in each request via aiohttp.BasicAuth
+        self._basic_auth: Optional[aiohttp.BasicAuth] = None
+        # NDMS2: session cookie stored manually (HA CookieJar rejects cookies for IP-address URLs)
+        self._ndms2_cookie: Optional[str] = None
 
         # Mesh/Wi-Fi System (MWS) capability cache:
         # None  -> unknown (not checked yet)
@@ -63,21 +69,59 @@ class KeeneticClient:
         await self._async_authenticate()
 
     async def _async_authenticate(self) -> None:
-        """Perform Basic auth against /rci/, like original ha_keenetic."""
+        """Authenticate to the router using the configured auth method."""
+        if self._auth_type == AUTH_TYPE_BASIC:
+            await self._async_authenticate_basic()
+        else:
+            await self._async_authenticate_ndms2()
+
+    async def _async_authenticate_ndms2(self) -> None:
+        """NDMS2 challenge-response auth (NDMS5+ firmware).
+
+        password = SHA256(challenge + MD5(login:realm:password))
+        """
         if self._session is None:
             raise KeeneticAuthError("ClientSession is not set")
 
-        auth_string = base64.b64encode(
-            f"{self._username}:{self._password}".encode()
-        ).decode()
-        headers = {"Authorization": f"Basic {auth_string}"}
-        url = f"{self._base}{RCI_ROOT}/"
+        auth_url = f"{self._base}/auth"
+        _LOGGER.debug("Authenticating to Keenetic via NDMS2 at %s", auth_url)
 
-        _LOGGER.debug("Authenticating to Keenetic via %s", url)
-
+        # Step 1: GET /auth — retrieve challenge, realm, and session cookie
         try:
             async with async_timeout.timeout(self._request_timeout):
-                resp = await self._session.get(url, headers=headers)
+                resp = await self._session.get(auth_url)
+        except aiohttp.ClientError as err:
+            raise KeeneticAuthError(f"Auth connection failed: {err}") from err
+
+        challenge = resp.headers.get("X-NDM-Challenge")
+        realm = resp.headers.get("X-NDM-Realm")
+        if not challenge or not realm:
+            raise KeeneticAuthError(
+                f"No NDMS2 challenge/realm in auth response (status {resp.status})"
+            )
+
+        # Extract session cookie manually — HA CookieJar(unsafe=False)
+        # ignores cookies for IP-address URLs, so we manage them ourselves
+        raw_cookie = resp.headers.get("Set-Cookie", "")
+        session_cookie = raw_cookie.split(";")[0].strip() if raw_cookie else ""
+
+        # Step 2: SHA256(challenge + MD5(login:realm:password))
+        md5_part = hashlib.md5(
+            f"{self._username}:{realm}:{self._password}".encode()
+        ).hexdigest()
+        auth_hash = hashlib.sha256(
+            f"{challenge}{md5_part}".encode()
+        ).hexdigest()
+
+        # Step 3: POST /auth with hash and session cookie
+        post_headers = {"Cookie": session_cookie} if session_cookie else {}
+        try:
+            async with async_timeout.timeout(self._request_timeout):
+                resp = await self._session.post(
+                    auth_url,
+                    json={"login": self._username, "password": auth_hash},
+                    headers=post_headers,
+                )
         except aiohttp.ClientError as err:
             raise KeeneticAuthError(f"Auth connection failed: {err}") from err
 
@@ -87,10 +131,43 @@ class KeeneticClient:
                 f"Auth failed (status {resp.status}): {text}"
             )
 
-        self._auth_header = headers
+        # Store the authenticated cookie for subsequent requests
+        auth_raw_cookie = resp.headers.get("Set-Cookie", "")
+        self._ndms2_cookie = (
+            auth_raw_cookie.split(";")[0].strip() if auth_raw_cookie else session_cookie
+        )
+
         self._authenticated = True
         _LOGGER.debug(
-            "Authenticated to Keenetic router at %s:%s",
+            "Authenticated to Keenetic router at %s:%s via NDMS2",
+            self._host,
+            self._port,
+        )
+
+    async def _async_authenticate_basic(self) -> None:
+        """Basic Auth via /rci/ (older firmware)."""
+        if self._session is None:
+            raise KeeneticAuthError("ClientSession is not set")
+
+        self._basic_auth = aiohttp.BasicAuth(self._username, self._password)
+        url = f"{self._base}{RCI_ROOT}/"
+        _LOGGER.debug("Authenticating to Keenetic via Basic Auth at %s", url)
+
+        try:
+            async with async_timeout.timeout(self._request_timeout):
+                resp = await self._session.get(url, auth=self._basic_auth)
+        except aiohttp.ClientError as err:
+            raise KeeneticAuthError(f"Auth connection failed: {err}") from err
+
+        if resp.status != 200:
+            text = await resp.text()
+            raise KeeneticAuthError(
+                f"Auth failed (status {resp.status}): {text}"
+            )
+
+        self._authenticated = True
+        _LOGGER.debug(
+            "Authenticated to Keenetic router at %s:%s via Basic Auth",
             self._host,
             self._port,
         )
@@ -116,7 +193,6 @@ class KeeneticClient:
         await self._ensure_auth()
 
         url = f"{self._base}{path}"
-        headers: Dict[str, str] = dict(self._auth_header or {})
 
         _LOGGER.debug(
             "Keenetic request: %s %s params=%s json=%s",
@@ -126,6 +202,10 @@ class KeeneticClient:
             json,
         )
 
+        req_headers: Dict[str, str] = {}
+        if self._ndms2_cookie:
+            req_headers["Cookie"] = self._ndms2_cookie
+
         try:
             async with async_timeout.timeout(self._request_timeout):
                 resp = await self._session.request(
@@ -133,17 +213,17 @@ class KeeneticClient:
                     url,
                     params=params,
                     json=json,
-                    headers=headers,
+                    auth=self._basic_auth,
+                    headers=req_headers or None,
                 )
         except aiohttp.ClientError as err:
             raise KeeneticApiError(f"Connection error: {err}") from err
 
-        # Basic auth hatalıysa yine 401 alırız
         if resp.status == 401:
             text = await resp.text()
-            _LOGGER.error("Keenetic Basic auth rejected: %s", text)
+            _LOGGER.error("Keenetic auth rejected: %s", text)
             self._authenticated = False
-            raise KeeneticAuthError(f"Basic auth rejected: {text}")
+            raise KeeneticAuthError(f"Auth rejected: {text}")
 
         if resp.status >= 400:
             text = await resp.text()
@@ -827,7 +907,7 @@ class KeeneticClient:
         """
         devices: List[Dict[str, Any]] = []
 
-        if not self._session or not self._auth_header or not node_ip:
+        if not self._session or not self._authenticated or not node_ip:
             return devices
 
         scheme = "https" if self._ssl else "http"
@@ -835,10 +915,14 @@ class KeeneticClient:
 
         try:
             async with async_timeout.timeout(self._request_timeout):
+                mesh_headers: Dict[str, str] = {}
+                if self._ndms2_cookie:
+                    mesh_headers["Cookie"] = self._ndms2_cookie
                 resp = await self._session.post(
                     url,
                     json={},
-                    headers=self._auth_header,
+                    auth=self._basic_auth,
+                    headers=mesh_headers or None,
                 )
 
             if resp.status == 401:
@@ -931,48 +1015,34 @@ class KeeneticClient:
     async def async_get_traffic_stats(
         self, interfaces: Dict[str, Any] | None = None
     ) -> Dict[str, Any]:
-        """Get traffic statistics (speed, totals).
-        
-        Args:
-            interfaces: Pre-fetched interfaces data to avoid duplicate API calls.
+        """Get WAN traffic statistics (speed in MB/s, totals in bytes).
+
+        Uses async_get_wan_status to determine the active WAN interface name,
+        then calls async_get_interface_stat to get real-time rxspeed/txspeed.
+        This is necessary because /rci/show/interface does not include speed fields
+        on newer NDMS firmware (NDMS5+).
         """
         stats: Dict[str, Any] = {
-            "download_speed": 0.0,  
-            "upload_speed": 0.0,    
-            "total_rx": 0,          
-            "total_tx": 0,          
+            "download_speed": 0.0,
+            "upload_speed": 0.0,
+            "total_rx": 0,
+            "total_tx": 0,
         }
 
         try:
-            if interfaces is None:
-                interfaces = await self.async_get_interfaces()
-            iface_list = self._normalize_interfaces(interfaces)
+            wan_status = await self.async_get_wan_status(interfaces=interfaces)
+            wan_iface = wan_status.get("interface")
+            if not wan_iface or wan_status.get("status") != "up":
+                return stats
 
-            WAN_KEYWORDS = ("wan", "internet", "pppoe", "isp")
-
-            for iface in iface_list:
-                name_fields = [
-                    iface.get("name"),
-                    iface.get("ifname"),
-                    iface.get("id"),
-                    iface.get("interface-name"),
-                    iface.get("description"),
-                    iface.get("type"),
-                ]
-                name_joined = " ".join(str(v) for v in name_fields if v).lower()
-                state = str(iface.get("state") or "").lower()
-
-                if state == "up" and any(k in name_joined for k in WAN_KEYWORDS):
-                    # Traffic counters
-                    stats["total_rx"] = iface.get("rxbytes") or iface.get("rx-bytes") or 0
-                    stats["total_tx"] = iface.get("txbytes") or iface.get("tx-bytes") or 0
-                    
-                    # Speed (bits per second -> MB/s)
-                    rx_speed = iface.get("rx-speed") or iface.get("rxspeed") or 0
-                    tx_speed = iface.get("tx-speed") or iface.get("txspeed") or 0
-                    stats["download_speed"] = round(float(rx_speed) / 8 / 1024 / 1024, 2)
-                    stats["upload_speed"] = round(float(tx_speed) / 8 / 1024 / 1024, 2)
-                    break
+            iface_stat = await self.async_get_interface_stat(wan_iface)
+            # rxspeed/txspeed are in bytes/sec
+            rx_speed = iface_stat.get("rxspeed") or 0
+            tx_speed = iface_stat.get("txspeed") or 0
+            stats["download_speed"] = round(float(rx_speed) / 1024 / 1024, 3)
+            stats["upload_speed"] = round(float(tx_speed) / 1024 / 1024, 3)
+            stats["total_rx"] = iface_stat.get("rxbytes") or 0
+            stats["total_tx"] = iface_stat.get("txbytes") or 0
 
         except Exception as err:
             _LOGGER.debug("Error getting traffic stats: %s", err)
