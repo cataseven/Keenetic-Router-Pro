@@ -59,47 +59,17 @@
       "wan_status": {
         "name": "Статус WAN"
       },
-      "wan_ip": {
-        "name": "WAN IP"
-      },
       "connected_clients": {
+        "name": "Всего подключено"
+      },
+      "router_clients": {
         "name": "Подключенные устройства"
+      },
+      "mesh_clients": {
+        "name": "Клиенты"
       },
       "disconnected_clients": {
         "name": "Отключенные устройства"
-      },
-      "download_speed": {
-        "name": "Скорость загрузки"
-      },
-      "upload_speed": {
-        "name": "Скорость отдачи"
-      },
-      "total_download": {
-        "name": "Всего загружено"
-      },
-      "total_upload": {
-        "name": "Всего отдано"
-      },
-      "ap_client_count": {
-        "name": "Устройства на AP"
-      },
-      "wireguard_uptime": {
-        "name": "Время работы WireGuard"
-      },
-      "wireguard_rx": {
-        "name": "WireGuard получено"
-      },
-      "wireguard_tx": {
-        "name": "WireGuard отправлено"
-      },
-      "usb_storage": {
-        "name": "USB-хранилище"
-      },
-      "mesh_usb_storage": {
-        "name": "Mesh USB-хранилище"
-      },
-      "mesh_firmware": {
-        "name": "Прошивка Mesh"
       },
       "extender_count": {
         "name": "Количество расширителей"
@@ -123,19 +93,9 @@
         "name": "Температура 5 ГГц"
       }
     },
-    "binary_sensor": {
-      "mesh_node": {
-        "name": "Mesh узел"
-      }
-    },
     "button": {
       "reboot": {
         "name": "Перезагрузить роутер"
-      }
-    },
-    "select": {
-      "access_policy": {
-        "name": "Политика доступа"
       }
     },
     "update": {

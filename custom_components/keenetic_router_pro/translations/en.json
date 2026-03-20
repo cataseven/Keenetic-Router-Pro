@@ -59,47 +59,17 @@
       "wan_status": {
         "name": "WAN Status"
       },
-      "wan_ip": {
-        "name": "WAN IP"
-      },
       "connected_clients": {
+        "name": "Total Connected Clients"
+      },
+      "router_clients": {
         "name": "Connected Clients"
+      },
+      "mesh_clients": {
+        "name": "Clients"
       },
       "disconnected_clients": {
         "name": "Disconnected Clients"
-      },
-      "download_speed": {
-        "name": "Download Speed"
-      },
-      "upload_speed": {
-        "name": "Upload Speed"
-      },
-      "total_download": {
-        "name": "Total Downloaded"
-      },
-      "total_upload": {
-        "name": "Total Uploaded"
-      },
-      "ap_client_count": {
-        "name": "AP Clients"
-      },
-      "wireguard_uptime": {
-        "name": "WireGuard Uptime"
-      },
-      "wireguard_rx": {
-        "name": "WireGuard RX"
-      },
-      "wireguard_tx": {
-        "name": "WireGuard TX"
-      },
-      "usb_storage": {
-        "name": "USB Storage"
-      },
-      "mesh_usb_storage": {
-        "name": "Mesh USB Storage"
-      },
-      "mesh_firmware": {
-        "name": "Mesh Firmware"
       },
       "extender_count": {
         "name": "Extender Count"
@@ -123,19 +93,9 @@
         "name": "Temperature 5 GHz"
       }
     },
-    "binary_sensor": {
-      "mesh_node": {
-        "name": "Mesh Node"
-      }
-    },
     "button": {
       "reboot": {
         "name": "Reboot Router"
-      }
-    },
-    "select": {
-      "access_policy": {
-        "name": "Access Policy"
       }
     },
     "update": {

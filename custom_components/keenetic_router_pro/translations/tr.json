@@ -59,47 +59,17 @@
       "wan_status": {
         "name": "WAN Durumu"
       },
-      "wan_ip": {
-        "name": "WAN IP"
-      },
       "connected_clients": {
+        "name": "Toplam Bağlı Cihazlar"
+      },
+      "router_clients": {
         "name": "Bağlı Cihazlar"
+      },
+      "mesh_clients": {
+        "name": "Cihazlar"
       },
       "disconnected_clients": {
         "name": "Bağlı Olmayan Cihazlar"
-      },
-      "download_speed": {
-        "name": "İndirme Hızı"
-      },
-      "upload_speed": {
-        "name": "Yükleme Hızı"
-      },
-      "total_download": {
-        "name": "Toplam İndirilen"
-      },
-      "total_upload": {
-        "name": "Toplam Yüklenen"
-      },
-      "ap_client_count": {
-        "name": "AP Cihaz Sayısı"
-      },
-      "wireguard_uptime": {
-        "name": "WireGuard Çalışma Süresi"
-      },
-      "wireguard_rx": {
-        "name": "WireGuard Alınan"
-      },
-      "wireguard_tx": {
-        "name": "WireGuard Gönderilen"
-      },
-      "usb_storage": {
-        "name": "USB Depolama"
-      },
-      "mesh_usb_storage": {
-        "name": "Mesh USB Depolama"
-      },
-      "mesh_firmware": {
-        "name": "Mesh Firmware"
       },
       "extender_count": {
         "name": "Genişletici Sayısı"
@@ -123,19 +93,9 @@
         "name": "Sıcaklık 5 GHz"
       }
     },
-    "binary_sensor": {
-      "mesh_node": {
-        "name": "Mesh Düğümü"
-      }
-    },
     "button": {
       "reboot": {
         "name": "Router'ı Yeniden Başlat"
-      }
-    },
-    "select": {
-      "access_policy": {
-        "name": "Erişim Politikası"
       }
     },
     "update": {
