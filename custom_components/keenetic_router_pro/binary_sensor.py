@@ -53,7 +53,7 @@ class KeeneticMeshNodeSensor(MeshEntity, BinarySensorEntity):
     @property
     def unique_id(self) -> str:
         safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
-        return f"{safe_cid}_connect"
+        return f"{safe_cid}_connect_v2"
 
     @property
     def name(self) -> str:
@@ -180,7 +180,7 @@ class KeeneticMeshUpdateSensor(MeshEntity, BinarySensorEntity):
     @property
     def unique_id(self) -> str:
         safe_cid = self._node_cid.replace("-", "").replace(":", "")[:16]
-        return f"{self._entry_id}_mesh_{safe_cid}_update"
+        return f"{self._entry_id}_mesh_{safe_cid}_update_v2"
 
     @property
     def name(self) -> str:

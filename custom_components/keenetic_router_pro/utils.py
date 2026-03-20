@@ -55,7 +55,7 @@ def get_mesh_device_info(
 
         return {
             "identifiers": {(DOMAIN, f"mesh_{node_cid}")},
-            "name": f"Mesh - {node_name}",
+            "name": node_name,
             "manufacturer": "Keenetic",
             "model": node.get("model") or "Extender",
             "sw_version": node.get("firmware"),
@@ -79,7 +79,7 @@ def get_mesh_usb_device_info(
     if mesh_cid:
         return {
             "identifiers": {(DOMAIN, f"mesh_{mesh_cid}")},
-            "name": f"Mesh - {mesh_node_name}",
+            "name": mesh_node_name,
             "manufacturer": "Keenetic",
             "via_device": (DOMAIN, entry_id),
         }

@@ -319,7 +319,6 @@ class _BaseWgSensor(ControllerEntity, SensorEntity):
 class KeeneticWgUptimeSensor(_BaseWgSensor):
     """WireGuard tünel uptime sensörü."""
     _attr_has_entity_name = True
-    _attr_translation_key = "wireguard_uptime"
 
     @property
     def unique_id(self) -> str:
@@ -349,7 +348,6 @@ class KeeneticWgUptimeSensor(_BaseWgSensor):
 class KeeneticWgRxSensor(_BaseWgSensor):
     """WireGuard RX (alınan trafik) sensörü."""
     _attr_has_entity_name = True
-    _attr_translation_key = "wireguard_rx"
 
     @property
     def unique_id(self) -> str:
@@ -380,7 +378,6 @@ class KeeneticWgRxSensor(_BaseWgSensor):
 class KeeneticWgTxSensor(_BaseWgSensor):
     """WireGuard TX (gönderilen trafik) sensörü."""
     _attr_has_entity_name = True
-    _attr_translation_key = "wireguard_tx"
 
     @property
     def unique_id(self) -> str:
@@ -411,7 +408,6 @@ class KeeneticWgTxSensor(_BaseWgSensor):
 class KeeneticWanIpSensor(ControllerEntity, SensorEntity):
     """WAN IP adresi sensörü."""
     _attr_has_entity_name = True
-    _attr_translation_key = "wan_ip"
     _attr_icon = "mdi:ip-network"
 
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
@@ -487,8 +483,8 @@ class KeeneticActiveConnectionsSensor(ControllerEntity, SensorEntity):
     _attr_has_entity_name = True
     _attr_translation_key = "active_connections"
     _attr_icon = "mdi:connection"
-
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_suggested_display_precision = 0
 
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
         ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
@@ -528,15 +524,15 @@ class KeeneticConnectedClientsSensor(ControllerEntity, SensorEntity):
     _attr_has_entity_name = True
     _attr_translation_key = "connected_clients"
     _attr_icon = "mdi:devices"
-
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_suggested_display_precision = 0
 
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
         ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
 
     @property
     def unique_id(self) -> str:
-        return f"{self._entry_id}_connected_clients"
+        return f"{self._entry_id}_connected_clients_v2"
 
     @property
     def native_value(self) -> int:
@@ -557,15 +553,15 @@ class KeeneticRouterClientsSensor(ControllerEntity, SensorEntity):
     _attr_has_entity_name = True
     _attr_translation_key = "router_clients"
     _attr_icon = "mdi:devices"
-
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_suggested_display_precision = 0
 
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
         ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
 
     @property
     def unique_id(self) -> str:
-        return f"{self._entry_id}_router_clients"
+        return f"{self._entry_id}_router_clients_v2"
 
     @property
     def native_value(self) -> int:
@@ -607,8 +603,8 @@ class KeeneticDisconnectedClientsSensor(ControllerEntity, SensorEntity):
     _attr_has_entity_name = True
     _attr_translation_key = "disconnected_clients"
     _attr_icon = "mdi:lan-disconnect"
-
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_suggested_display_precision = 0
 
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
         ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
@@ -628,8 +624,8 @@ class KeeneticExtenderCountSensor(ControllerEntity, SensorEntity):
     _attr_has_entity_name = True
     _attr_translation_key = "extender_count"
     _attr_icon = "mdi:access-point-network"
-
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_suggested_display_precision = 0
 
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
         ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
@@ -668,7 +664,6 @@ class KeeneticExtenderCountSensor(ControllerEntity, SensorEntity):
 class KeeneticUsbStorageSensor(ControllerEntity, SensorEntity):
     """USB depolama sensörü."""
     _attr_has_entity_name = True
-    _attr_translation_key = "usb_storage"
     _attr_icon = "mdi:usb-flash-drive"
     _attr_state_class = SensorStateClass.MEASUREMENT
 
@@ -751,7 +746,6 @@ class KeeneticUsbStorageSensor(ControllerEntity, SensorEntity):
 class KeeneticMeshUsbStorageSensor(MeshEntity, SensorEntity):
     """USB depolama sensörü - Mesh node üzerindeki USB."""
     _attr_has_entity_name = True
-    _attr_translation_key = "mesh_usb_storage"
     _attr_icon = "mdi:usb-flash-drive"
     _attr_state_class = SensorStateClass.MEASUREMENT
 
@@ -780,7 +774,7 @@ class KeeneticMeshUsbStorageSensor(MeshEntity, SensorEntity):
     def unique_id(self) -> str:
         safe_id = self._device_id.replace("/", "_").replace(" ", "_").lower()
         safe_cid = (self._mesh_cid or "unknown").replace("-", "_").replace(":", "_")[:12]
-        return f"{safe_cid}_usb_{safe_id}"
+        return f"{safe_cid}_usb_{safe_id}_v2"
 
     @property
     def name(self) -> str:
@@ -846,7 +840,7 @@ class KeeneticMeshUptimeSensor(MeshEntity, SensorEntity):
     @property
     def unique_id(self) -> str:
         safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
-        return f"{safe_cid}_uptime"
+        return f"{safe_cid}_uptime_v2"
 
     @property
     def native_unit_of_measurement(self) -> str:
@@ -868,9 +862,10 @@ class KeeneticMeshUptimeSensor(MeshEntity, SensorEntity):
 class KeeneticMeshClientsSensor(MeshEntity, SensorEntity):
     """Mesh node active clients sensor."""
     _attr_has_entity_name = True
-    _attr_translation_key = "connected_clients"
+    _attr_translation_key = "mesh_clients"
     _attr_icon = "mdi:account-group"
-    _attr_state_class = "measurement"
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_suggested_display_precision = 0
 
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry, node_cid: str) -> None:
         MeshEntity.__init__(self, coordinator, entry.entry_id, entry.title, node_cid)
@@ -878,7 +873,7 @@ class KeeneticMeshClientsSensor(MeshEntity, SensorEntity):
     @property
     def unique_id(self) -> str:
         safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
-        return f"{safe_cid}_clients"
+        return f"{safe_cid}_clients_v2"
 
     @property
     def native_value(self) -> int:
@@ -989,7 +984,6 @@ class KeeneticWifi5TemperatureSensor(ControllerEntity, SensorEntity):
 class KeeneticInterfaceRxSensor(ControllerEntity, SensorEntity):
     """Сенсор входящего трафика для конкретного интерфейса."""
     _attr_has_entity_name = True
-    _attr_translation_key = "interface_rx"
     _attr_icon = "mdi:download-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
     _attr_native_unit_of_measurement = UnitOfInformation.GIGABYTES
@@ -1043,7 +1037,6 @@ class KeeneticInterfaceRxSensor(ControllerEntity, SensorEntity):
 class KeeneticInterfaceTxSensor(ControllerEntity, SensorEntity):
     """Сенсор исходящего трафика для конкретного интерфейса."""
     _attr_has_entity_name = True
-    _attr_translation_key = "interface_tx"
     _attr_icon = "mdi:upload-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
     _attr_native_unit_of_measurement = UnitOfInformation.GIGABYTES
@@ -1097,7 +1090,6 @@ class KeeneticInterfaceTxSensor(ControllerEntity, SensorEntity):
 class KeeneticWifi24RxSensor(ControllerEntity, SensorEntity):
     """WiFi 2.4GHz RX sensor."""
     _attr_has_entity_name = True
-    _attr_translation_key = "wifi_24_rx"
     _attr_icon = "mdi:download-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
     _attr_native_unit_of_measurement = UnitOfInformation.GIGABYTES
@@ -1130,7 +1122,6 @@ class KeeneticWifi24RxSensor(ControllerEntity, SensorEntity):
 class KeeneticWifi24TxSensor(ControllerEntity, SensorEntity):
     """WiFi 2.4GHz TX sensor."""
     _attr_has_entity_name = True
-    _attr_translation_key = "wifi_24_tx"
     _attr_icon = "mdi:upload-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
     _attr_native_unit_of_measurement = UnitOfInformation.GIGABYTES
@@ -1163,7 +1154,6 @@ class KeeneticWifi24TxSensor(ControllerEntity, SensorEntity):
 class KeeneticWifi5RxSensor(ControllerEntity, SensorEntity):
     """WiFi 5GHz RX sensor."""
     _attr_has_entity_name = True
-    _attr_translation_key = "wifi_5_rx"
     _attr_icon = "mdi:download-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
     _attr_native_unit_of_measurement = UnitOfInformation.GIGABYTES
@@ -1196,7 +1186,6 @@ class KeeneticWifi5RxSensor(ControllerEntity, SensorEntity):
 class KeeneticWifi5TxSensor(ControllerEntity, SensorEntity):
     """WiFi 5GHz TX sensor."""
     _attr_has_entity_name = True
-    _attr_translation_key = "wifi_5_tx"
     _attr_icon = "mdi:upload-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
     _attr_native_unit_of_measurement = UnitOfInformation.GIGABYTES
@@ -1229,7 +1218,6 @@ class KeeneticWifi5TxSensor(ControllerEntity, SensorEntity):
 class KeeneticLanRxSensor(ControllerEntity, SensorEntity):
     """LAN (GigabitEthernet0) RX sensor."""
     _attr_has_entity_name = True
-    _attr_translation_key = "lan_rx"
     _attr_icon = "mdi:download-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
     _attr_native_unit_of_measurement = UnitOfInformation.GIGABYTES
@@ -1262,7 +1250,6 @@ class KeeneticLanRxSensor(ControllerEntity, SensorEntity):
 class KeeneticLanTxSensor(ControllerEntity, SensorEntity):
     """LAN (GigabitEthernet0) TX sensor."""
     _attr_has_entity_name = True
-    _attr_translation_key = "lan_tx"
     _attr_icon = "mdi:upload-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
     _attr_native_unit_of_measurement = UnitOfInformation.GIGABYTES
@@ -1295,7 +1282,6 @@ class KeeneticLanTxSensor(ControllerEntity, SensorEntity):
 class KeeneticWanRxSensor(ControllerEntity, SensorEntity):
     """WAN (GigabitEthernet1/ISP) RX sensor."""
     _attr_has_entity_name = True
-    _attr_translation_key = "wan_rx"
     _attr_icon = "mdi:download-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
     _attr_native_unit_of_measurement = UnitOfInformation.GIGABYTES
@@ -1328,7 +1314,6 @@ class KeeneticWanRxSensor(ControllerEntity, SensorEntity):
 class KeeneticWanTxSensor(ControllerEntity, SensorEntity):
     """WAN (GigabitEthernet1/ISP) TX sensor."""
     _attr_has_entity_name = True
-    _attr_translation_key = "wan_tx"
     _attr_icon = "mdi:upload-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
     _attr_native_unit_of_measurement = UnitOfInformation.GIGABYTES
@@ -1407,7 +1392,7 @@ class KeeneticMeshFirmwareVersionSensor(MeshEntity, SensorEntity):
     @property
     def unique_id(self) -> str:
         safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
-        return f"{safe_cid}_firmware_version"
+        return f"{safe_cid}_firmware_version_v2"
 
     @property
     def native_value(self) -> str | None:
@@ -1470,7 +1455,7 @@ class KeeneticMeshLocalIpSensor(MeshEntity, SensorEntity):
     @property
     def unique_id(self) -> str:
         safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
-        return f"{safe_cid}_local_ip"
+        return f"{safe_cid}_local_ip_v2"
 
     @property
     def native_value(self) -> str | None:
@@ -1495,7 +1480,7 @@ class KeeneticMeshCpuLoadSensor(MeshEntity, SensorEntity):
     @property
     def unique_id(self) -> str:
         safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
-        return f"{safe_cid}_cpu_load"
+        return f"{safe_cid}_cpu_load_v2"
 
     @property
     def native_value(self) -> float | None:
@@ -1525,7 +1510,7 @@ class KeeneticMeshMemorySensor(MeshEntity, SensorEntity):
     @property
     def unique_id(self) -> str:
         safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
-        return f"{safe_cid}_memory"
+        return f"{safe_cid}_memory_v2"
 
     @property
     def native_value(self) -> float | None:

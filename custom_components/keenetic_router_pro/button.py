@@ -73,7 +73,7 @@ class KeeneticMeshRebootButton(MeshEntity, ButtonEntity):
     @property
     def unique_id(self) -> str:
         safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
-        return f"{safe_cid}_reboot_button"
+        return f"{safe_cid}_reboot_button_v2"
 
     @property
     def name(self) -> str:
