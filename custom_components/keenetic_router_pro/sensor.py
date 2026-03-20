@@ -1035,6 +1035,7 @@ class KeeneticWifi5TemperatureSensor(ControllerEntity, SensorEntity):
 
 class KeeneticInterfaceRxSensor(ControllerEntity, SensorEntity):
     """Сенсор входящего трафика для конкретного интерфейса."""
+    _attr_has_entity_name = True
     _attr_translation_key = "interface_rx"
     _attr_icon = "mdi:download-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -1088,6 +1089,7 @@ class KeeneticInterfaceRxSensor(ControllerEntity, SensorEntity):
 
 class KeeneticInterfaceTxSensor(ControllerEntity, SensorEntity):
     """Сенсор исходящего трафика для конкретного интерфейса."""
+    _attr_has_entity_name = True
     _attr_translation_key = "interface_tx"
     _attr_icon = "mdi:upload-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -1141,6 +1143,7 @@ class KeeneticInterfaceTxSensor(ControllerEntity, SensorEntity):
 
 class KeeneticWifi24RxSensor(ControllerEntity, SensorEntity):
     """WiFi 2.4GHz RX sensor."""
+    _attr_has_entity_name = True
     _attr_translation_key = "wifi_24_rx"
     _attr_icon = "mdi:download-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -1173,6 +1176,7 @@ class KeeneticWifi24RxSensor(ControllerEntity, SensorEntity):
 
 class KeeneticWifi24TxSensor(ControllerEntity, SensorEntity):
     """WiFi 2.4GHz TX sensor."""
+    _attr_has_entity_name = True
     _attr_translation_key = "wifi_24_tx"
     _attr_icon = "mdi:upload-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -1205,6 +1209,7 @@ class KeeneticWifi24TxSensor(ControllerEntity, SensorEntity):
 
 class KeeneticWifi5RxSensor(ControllerEntity, SensorEntity):
     """WiFi 5GHz RX sensor."""
+    _attr_has_entity_name = True
     _attr_translation_key = "wifi_5_rx"
     _attr_icon = "mdi:download-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -1237,6 +1242,7 @@ class KeeneticWifi5RxSensor(ControllerEntity, SensorEntity):
 
 class KeeneticWifi5TxSensor(ControllerEntity, SensorEntity):
     """WiFi 5GHz TX sensor."""
+    _attr_has_entity_name = True
     _attr_translation_key = "wifi_5_tx"
     _attr_icon = "mdi:upload-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -1269,6 +1275,7 @@ class KeeneticWifi5TxSensor(ControllerEntity, SensorEntity):
 
 class KeeneticLanRxSensor(ControllerEntity, SensorEntity):
     """LAN (GigabitEthernet0) RX sensor."""
+    _attr_has_entity_name = True
     _attr_translation_key = "lan_rx"
     _attr_icon = "mdi:download-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -1301,6 +1308,7 @@ class KeeneticLanRxSensor(ControllerEntity, SensorEntity):
 
 class KeeneticLanTxSensor(ControllerEntity, SensorEntity):
     """LAN (GigabitEthernet0) TX sensor."""
+    _attr_has_entity_name = True
     _attr_translation_key = "lan_tx"
     _attr_icon = "mdi:upload-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -1333,6 +1341,7 @@ class KeeneticLanTxSensor(ControllerEntity, SensorEntity):
 
 class KeeneticWanRxSensor(ControllerEntity, SensorEntity):
     """WAN (GigabitEthernet1/ISP) RX sensor."""
+    _attr_has_entity_name = True
     _attr_translation_key = "wan_rx"
     _attr_icon = "mdi:download-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -1365,6 +1374,7 @@ class KeeneticWanRxSensor(ControllerEntity, SensorEntity):
 
 class KeeneticWanTxSensor(ControllerEntity, SensorEntity):
     """WAN (GigabitEthernet1/ISP) TX sensor."""
+    _attr_has_entity_name = True
     _attr_translation_key = "wan_tx"
     _attr_icon = "mdi:upload-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
