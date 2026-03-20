@@ -65,14 +65,15 @@
       "pppoe_uptime": {"name": "PPPoE Uptime"},
       "active_connections": {"name": "Active Connections"},
       "firmware_version": {"name": "Firmware Version"},
-      "mesh_firmware_version": {"name": "Firmware Version"}
+      "mesh_firmware_version": {"name": "Firmware Version"},
+      "wifi_24_temperature": {"name": "Temperature 2.4 GHz"},
+      "wifi_5_temperature": {"name": "Temperature 5 GHz"}
     },
     "binary_sensor": {
       "mesh_node": {"name": "Mesh Node"}
     },
     "button": {
-      "reboot": {"name": "Reboot Router"},
-      "mesh_reboot": {"name": "Reboot Mesh Node"}
+      "reboot": {"name": "Reboot Router"}
     },
     "select": {
       "access_policy": {"name": "Access Policy"}
