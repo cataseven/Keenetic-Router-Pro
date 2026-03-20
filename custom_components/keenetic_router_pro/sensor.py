@@ -834,7 +834,7 @@ class KeeneticMeshUsbStorageSensor(MeshEntity, SensorEntity):
 class KeeneticMeshUptimeSensor(MeshEntity, SensorEntity):
     """Mesh node uptime sensor."""
     _attr_has_entity_name = True
-    _attr_translation_key = "mesh_uptime"
+    _attr_translation_key = "uptime"
     _attr_icon = "mdi:timer-outline"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
