@@ -54,7 +54,7 @@ class KeeneticFirmwareUpdate(ControllerEntity, UpdateEntity):
     """Firmware update entity for the main Keenetic router."""
 
     _attr_has_entity_name = True
-    _attr_name = "Firmware Update"
+    _attr_translation_key = "update"
     _attr_device_class = UpdateDeviceClass.FIRMWARE
     _attr_supported_features = (
         UpdateEntityFeature.INSTALL
@@ -192,7 +192,7 @@ class KeeneticMeshFirmwareUpdate(MeshEntity, UpdateEntity):
     """Firmware update entity for a Keenetic mesh node (info-only)."""
 
     _attr_has_entity_name = True
-    _attr_name = "Firmware Update"
+    _attr_translation_key = "update"
     _attr_device_class = UpdateDeviceClass.FIRMWARE
     # Mesh nodes update via the controller, so no install feature
     _attr_supported_features = UpdateEntityFeature(0)

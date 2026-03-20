@@ -340,24 +340,24 @@ class KeeneticClient:
         try:
 
             result = await self._rci_parse(f"ip ping {ip_address} count 1")
-            
+
             if result is None:
                 return False
-            
+
             result_str = str(result).lower()
 
             if "1 received" in result_str or "bytes from" in result_str:
                 return True
-            
+
             # Check for failure patterns
             if "0 received" in result_str or "100% packet loss" in result_str:
                 return False
 
             if "timeout" not in result_str and "unreachable" not in result_str:
                 return True
-            
+
             return False
-            
+
         except Exception as err:
             _LOGGER.debug("Ping to %s failed: %s", ip_address, err)
             return False
@@ -373,25 +373,25 @@ class KeeneticClient:
         """
         if not ip_addresses:
             return {}
-        
+
         tasks = [self.async_ping_ip(ip, timeout) for ip in ip_addresses]
-        
+
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         ping_results: Dict[str, bool] = {}
         for ip, result in zip(ip_addresses, results):
             if isinstance(result, Exception):
                 ping_results[ip] = False
             else:
                 ping_results[ip] = bool(result)
-        
+
         return ping_results
 
     async def async_get_system_info(self) -> Dict[str, Any]:
         """Return basic system info: hostname, version, cpu, memory, uptime, etc."""
         data = await self._rci_get("show/system")
         return data or {}
-    
+
     async def async_get_version_info(self) -> Dict[str, Any]:
         """Return version info"""
         data = await self._rci_get("show/version")
@@ -925,7 +925,7 @@ class KeeneticClient:
 
             # Endpoint çalıştı
             self._mws_member_supported = True
-            
+
             if not data or not isinstance(data, list):
                 return nodes
 
@@ -937,7 +937,7 @@ class KeeneticClient:
                 mac = member.get("mac")
                 system_info = member.get("system", {})
                 rci_info = member.get("rci", {})
-                
+
                 is_connected = (
                     rci_info.get("errors", 0) == 0 
                     and member.get("internet-available", False)
@@ -961,6 +961,7 @@ class KeeneticClient:
                     "firmware_available": member.get("fw-available"),
                     "associations": member.get("associations", 0), 
                     "rci_errors": rci_info.get("errors", 0),
+                    "fqdn": member.get("fqdn")
                 })
 
         except Exception as err:
@@ -1012,7 +1013,7 @@ class KeeneticClient:
         Command format: mws member {cid} reboot
         """
         _LOGGER.warning("Sending reboot command to mesh node cid=%s", cid)
-        
+
         cmd = f"mws member {cid} reboot"
         await self._rci_parse(cmd)
 
@@ -1142,7 +1143,7 @@ class KeeneticClient:
         try:
             if interfaces is None:
                 interfaces = await self.async_get_interfaces()
-            
+
             iface_list = self._normalize_interfaces(interfaces)
             WAN_KEYWORDS = ("wan", "internet", "pppoe", "isp", "provider")
 
@@ -1188,10 +1189,10 @@ class KeeneticClient:
                         iface.get("tx_rate") or 
                         0
                     )
-                    
+
                     stats["download_speed"] = round(float(rx_speed) / 8 / 1024 / 1024, 2)
                     stats["upload_speed"] = round(float(tx_speed) / 8 / 1024 / 1024, 2)
-                    
+
                     _LOGGER.debug(
                         "Traffic stats for %s: rx=%s, tx=%s, rx_speed=%s, tx_speed=%s",
                         name_joined, stats["total_rx"], stats["total_tx"],
@@ -1211,19 +1212,19 @@ class KeeneticClient:
         """
         interfaces = await self.async_get_interfaces()
         iface_list = self._normalize_interfaces(interfaces)
-        
+
         all_stats: Dict[str, Dict[str, Any]] = {}
-        
+
         for iface in iface_list:
             iface_name = iface.get("id") or iface.get("interface-name")
             if not iface_name:
                 continue
-            
+
             # Пропускаем внутренние интерфейсы (Bridge, Vlan, AccessPoint)
             iface_type = iface.get("type", "").lower()
             if iface_type in ("bridge", "vlan", "accesspoint"):
                 continue
-            
+
             try:
                 stats = await self.async_get_interface_stat(iface_name)
                 if stats:
@@ -1235,7 +1236,7 @@ class KeeneticClient:
                     all_stats[iface_name] = stats
             except Exception as err:
                 _LOGGER.debug("Failed to get stats for %s: %s", iface_name, err)
-        
+
         return all_stats
 
     async def async_get_usb_storage(self) -> List[Dict[str, Any]]:
@@ -1454,7 +1455,7 @@ class KeeneticClient:
         Extender/repeater cihazları client sayısından çıkarılır.
         """
         clients = await self.async_get_clients()
-        
+
         connected = 0
         disconnected = 0
         per_ap: Dict[str, int] = {}
@@ -1475,7 +1476,7 @@ class KeeneticClient:
                     "http_host": client.get("http-host"),
                 })
                 continue  
-            
+
             is_active = False
             if "active" in client:
                 value = client.get("active")
@@ -1527,13 +1528,13 @@ class KeeneticClient:
             data = await self._rci_get("ip/policy")
             if not data or not isinstance(data, dict):
                 return {}
-            
+
             policies = {}
             for policy_id, policy_data in data.items():
                 if isinstance(policy_data, dict):
                     desc = policy_data.get("description") or policy_id
                     policies[policy_id] = str(desc)
-            
+
             return policies
         except Exception as err:
             _LOGGER.debug("Error getting policies: %s", err)
@@ -1551,7 +1552,7 @@ class KeeneticClient:
             data = await self._rci_get("ip/hotspot/host")
             if not data:
                 return {}
-            
+
             # Liste veya dict gelebilir
             hosts: list = []
             if isinstance(data, list):
@@ -1560,7 +1561,7 @@ class KeeneticClient:
                 hosts = data.get("host") or data.get("hosts") or []
                 if isinstance(hosts, dict):
                     hosts = list(hosts.values())
-            
+
             host_policies = {}
             for host in hosts:
                 if not isinstance(host, dict):
@@ -1571,7 +1572,7 @@ class KeeneticClient:
                         "policy": host.get("policy"), 
                         "access": host.get("access"), 
                     }
-            
+
             return host_policies
         except Exception as err:
             _LOGGER.debug("Error getting host policies: %s", err)
@@ -1585,7 +1586,7 @@ class KeeneticClient:
             policy: Policy ID (e.g. "Policy0", "Policy1") or "deny"/"default"
         """
         mac_clean = mac.lower().replace("-", ":")
-        
+
         if policy.lower() == "deny":
             cmd = f"ip hotspot host {mac_clean} deny"
             _LOGGER.debug("Blocking client %s", mac_clean)
@@ -1606,7 +1607,7 @@ class KeeneticClient:
             cmd = f"ip hotspot host {mac_clean} policy {policy}"
             _LOGGER.debug("Setting client %s policy to %s", mac_clean, policy)
             await self._rci_parse(cmd)
-        
+
         await self._rci_parse("system configuration save")
 
     async def async_block_client(self, mac: str) -> None:
@@ -1623,17 +1624,17 @@ class KeeneticClient:
             data = await self._rci_get("show/version")
             if not data:
                 return {}
-            
+
             current = data.get("title") or data.get("release")
             available = data.get("fw-available") or data.get("release-available")
-            
+
             # Проверяем, есть ли обновление (только stable канал)
             has_update = (
                 current and available and 
                 current != available and
                 data.get("fw-update-sandbox") == "stable"
             )
-            
+
             return {
                 "current": {
                     "title": current,
@@ -1655,7 +1656,7 @@ class KeeneticClient:
         """Start firmware update process via /rci/system/update."""
         try:
             result = await self._rci_post("system/update", {"confirm": True})
-            
+
             if isinstance(result, dict):
                 status = result.get("status") or result.get("result")
                 if status in ("started", "ok", True, "accepted"):
@@ -1663,7 +1664,7 @@ class KeeneticClient:
                     return True
 
             return result is not None
-            
+
         except Exception as err:
             _LOGGER.error("Error starting firmware update: %s", err)
             raise HomeAssistantError(f"Failed to start update: {err}")
@@ -1678,7 +1679,7 @@ class KeeneticClient:
             data = await self._rci_get("system/update/status")
             if not data or not isinstance(data, dict):
                 return {}
-            
+
             return {
                 "in_progress": data.get("in-progress", False),
                 "progress_percent": data.get("progress", 0),
@@ -1686,4 +1687,49 @@ class KeeneticClient:
                 "eta_seconds": data.get("eta"),
             }
         except Exception:
+            return {}
+        
+    async def async_get_ndns_info(self) -> Dict[str, Any]:
+        """Get NDNS (Dynamic DNS) information from /rci/show/ndns.
+        
+        Returns detailed information about NDNS configuration and tunnels.
+        Example response includes:
+        - name: Hostname
+        - domain: Domain name
+        - access: Access type (cloud, etc.)
+        - ttp: Tunnel information with tunnel list
+        - updated: Last update status
+        - address/address6: IP addresses
+        """
+        try:
+            data = await self._rci_get("show/ndns")
+            if not data:
+                return {}
+            
+            # Ensure we always return a dict
+            result = dict(data) if isinstance(data, dict) else {}
+            
+            # Parse tunnel information if present
+            if "ttp" in result and isinstance(result["ttp"], dict):
+                ttp = result["ttp"]
+                # Ensure tunnel list is properly formatted
+                if "tunnel" in ttp and isinstance(ttp["tunnel"], list):
+                    tunnels = []
+                    for tunnel in ttp["tunnel"]:
+                        if isinstance(tunnel, dict):
+                            # Convert string numbers to int where appropriate
+                            for key in ["uptime", "idle", "timeout", "linger"]:
+                                if key in tunnel and tunnel[key] is not None:
+                                    try:
+                                        tunnel[key] = int(tunnel[key])
+                                    except (ValueError, TypeError):
+                                        pass
+                            tunnels.append(tunnel)
+                    ttp["tunnel"] = tunnels
+            
+            _LOGGER.debug("NDNS info retrieved: %s", result)
+            return result
+            
+        except Exception as err:
+            _LOGGER.debug("Error getting NDNS info: %s", err)
             return {}

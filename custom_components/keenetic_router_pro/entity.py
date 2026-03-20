@@ -66,11 +66,23 @@ class ControllerEntity(CoordinatorEntity):
     
     @property
     def device_info(self) -> DeviceInfo:
+        ndns_info = self.coordinator.data.get("ndns", {})
+        ndns_domain = None
+        
+        if ndns_info:
+            name = ndns_info.get("name")
+            domain = ndns_info.get("domain")
+            if name and domain:
+                ndns_domain = f"{name}.{domain}"
+        
         return get_main_device_info(
             self._title, 
             self._entry_id,
             self._firmware_version,
             self._model_name,
+            host=self.coordinator._client._host if hasattr(self.coordinator, '_client') else None,
+            ssl=self.coordinator._client._ssl if hasattr(self.coordinator, '_client') else False,
+            ndns_domain=ndns_domain,
         )
 
 
@@ -100,9 +112,15 @@ class MeshEntity(CoordinatorEntity):
     
     @property
     def device_info(self) -> DeviceInfo:
+        node = self._node
+        node_ip = node.get("ip") if node else None
+        
         return get_mesh_device_info(
             self._title,
             self._entry_id,
             self._node,
             self._node_cid,
+            host=node_ip,
+            ssl=self.coordinator._client._ssl if hasattr(self.coordinator, '_client') else False,
+            fqdn=node.get("fqdn")
         )

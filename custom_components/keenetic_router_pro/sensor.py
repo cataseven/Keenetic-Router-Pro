@@ -1,6 +1,6 @@
 """Sensors for Keenetic Router Pro."""
 from __future__ import annotations
-from typing import Any
+from typing import Any, Optional
 from homeassistant.components.sensor import (
     SensorEntity,
     SensorDeviceClass,
@@ -16,9 +16,10 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from .const import DOMAIN, DATA_COORDINATOR, CONF_TRACKED_CLIENTS
+from .const import DOMAIN, DATA_COORDINATOR, CONF_TRACKED_CLIENTS, DATA_CLIENT
 from .coordinator import KeeneticCoordinator
 from .entity import ControllerEntity, MeshEntity
+from . import KeeneticClient
 
 
 async def async_setup_entry(
@@ -29,6 +30,7 @@ async def async_setup_entry(
     """Set up Keenetic Router Pro sensors from a config entry."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: KeeneticCoordinator = data[DATA_COORDINATOR]
+    client: Optional[KeeneticClient] = data.get(DATA_CLIENT)
     entities: list[SensorEntity] = []
 
     # Temel sistem sensörleri
@@ -50,18 +52,25 @@ async def async_setup_entry(
     entities.append(KeeneticWifi24TemperatureSensor(coordinator, entry))
     entities.append(KeeneticWifi5TemperatureSensor(coordinator, entry))
 
+    if client:
+        entities.append(KeeneticLocalIpSensor(coordinator, entry, client._host))
+    else:
+        # Если клиента нет, пытаемся получить IP из coordinator или используем fallback
+        host = entry.data.get("host", "unknown")
+        entities.append(KeeneticLocalIpSensor(coordinator, entry, host))
+
     # WiFi 2.4GHz
     entities.append(KeeneticWifi24RxSensor(coordinator, entry))
     entities.append(KeeneticWifi24TxSensor(coordinator, entry))
-    
+
     # WiFi 5GHz
     entities.append(KeeneticWifi5RxSensor(coordinator, entry))
     entities.append(KeeneticWifi5TxSensor(coordinator, entry))
-    
+
     # LAN
     entities.append(KeeneticLanRxSensor(coordinator, entry))
     entities.append(KeeneticLanTxSensor(coordinator, entry))
-    
+
     # WAN
     entities.append(KeeneticWanRxSensor(coordinator, entry))
     entities.append(KeeneticWanTxSensor(coordinator, entry))
@@ -69,10 +78,15 @@ async def async_setup_entry(
     mesh_nodes = coordinator.data.get("mesh_nodes", [])
     for node in mesh_nodes:
         node_cid = node.get("cid") or node.get("id")
+        node_ip = node.get("ip")
         if node_cid:
+            entities.append(KeeneticMeshCpuLoadSensor(coordinator, entry, node_cid))
+            entities.append(KeeneticMeshMemorySensor(coordinator, entry, node_cid))
             entities.append(KeeneticMeshUptimeSensor(coordinator, entry, node_cid))
             entities.append(KeeneticMeshClientsSensor(coordinator, entry, node_cid))
             entities.append(KeeneticMeshFirmwareVersionSensor(coordinator, entry, node_cid))
+            if node_ip:
+                entities.append(KeeneticMeshLocalIpSensor(coordinator, entry, node_cid, node_ip))
 
     # WireGuard profilleri için sensörler
     wg_profiles = coordinator.data.get("wireguard", {}).get("profiles", {})
@@ -117,10 +131,6 @@ class KeeneticCpuLoadSensor(ControllerEntity, SensorEntity):
         return f"{self._entry_id}_cpu_load"
 
     @property
-    def name(self) -> str:
-        return "CPU Load"
-
-    @property
     def native_unit_of_measurement(self) -> str:
         return PERCENTAGE
 
@@ -150,10 +160,6 @@ class KeeneticMemoryUsageSensor(ControllerEntity, SensorEntity):
     @property
     def unique_id(self) -> str:
         return f"{self._entry_id}_mem_usage"
-
-    @property
-    def name(self) -> str:
-        return "Memory Usage"
 
     @property
     def native_unit_of_measurement(self) -> str:
@@ -206,10 +212,6 @@ class KeeneticUptimeSensor(ControllerEntity, SensorEntity):
         return f"{self._entry_id}_uptime"
 
     @property
-    def name(self) -> str:
-        return "Uptime"
-
-    @property
     def native_unit_of_measurement(self) -> str:
         return UnitOfTime.SECONDS
 
@@ -258,10 +260,6 @@ class KeeneticWanStatusSensor(ControllerEntity, SensorEntity):
         return f"{self._entry_id}_wan_status"
 
     @property
-    def name(self) -> str:
-        return "WAN Status"
-
-    @property
     def native_value(self) -> str | None:
         wan = self.coordinator.data.get("wan_status", {})
         return wan.get("status", "down")
@@ -296,7 +294,7 @@ class _BaseWgSensor(ControllerEntity, SensorEntity):
     """WireGuard ortak mantığı."""
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_state_class = SensorStateClass.MEASUREMENT
-    
+
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry, wg_name: str) -> None:
         ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
         self._wg_name = wg_name
@@ -459,10 +457,6 @@ class KeeneticPppoeUptimeSensor(ControllerEntity, SensorEntity):
         return f"{self._entry_id}_pppoe_uptime"
 
     @property
-    def name(self) -> str:
-        return "PPPoE Uptime"
-
-    @property
     def native_unit_of_measurement(self) -> str:
         return UnitOfTime.SECONDS
 
@@ -502,10 +496,6 @@ class KeeneticActiveConnectionsSensor(ControllerEntity, SensorEntity):
     @property
     def unique_id(self) -> str:
         return f"{self._entry_id}_active_connections"
-
-    @property
-    def name(self) -> str:
-        return "Active Connections"
 
     @property
     def native_value(self) -> int:
@@ -549,10 +539,6 @@ class KeeneticConnectedClientsSensor(ControllerEntity, SensorEntity):
         return f"{self._entry_id}_connected_clients"
 
     @property
-    def name(self) -> str:
-        return "Connected Clients"
-
-    @property
     def native_value(self) -> int:
         stats = self.coordinator.data.get("client_stats", {})
         return stats.get("connected", 0)
@@ -580,10 +566,6 @@ class KeeneticRouterClientsSensor(ControllerEntity, SensorEntity):
     @property
     def unique_id(self) -> str:
         return f"{self._entry_id}_router_clients"
-
-    @property
-    def name(self) -> str:
-        return "Clients"
 
     @property
     def native_value(self) -> int:
@@ -636,10 +618,6 @@ class KeeneticDisconnectedClientsSensor(ControllerEntity, SensorEntity):
         return f"{self._entry_id}_disconnected_clients"
 
     @property
-    def name(self) -> str:
-        return "Disconnected Clients"
-
-    @property
     def native_value(self) -> int:
         stats = self.coordinator.data.get("client_stats", {})
         return stats.get("disconnected", 0)
@@ -661,10 +639,6 @@ class KeeneticExtenderCountSensor(ControllerEntity, SensorEntity):
         return f"{self._entry_id}_extender_count"
 
     @property
-    def name(self) -> str:
-        return "Extenders"
-
-    @property
     def native_value(self) -> int:
         mesh_nodes = self.coordinator.data.get("mesh_nodes", [])
         return len(mesh_nodes)
@@ -674,7 +648,7 @@ class KeeneticExtenderCountSensor(ControllerEntity, SensorEntity):
         mesh_nodes = self.coordinator.data.get("mesh_nodes", [])
         connected = sum(1 for n in mesh_nodes if n.get("connected", False))
         disconnected = len(mesh_nodes) - connected
-        
+
         node_list = []
         for node in mesh_nodes:
             node_list.append({
@@ -683,7 +657,7 @@ class KeeneticExtenderCountSensor(ControllerEntity, SensorEntity):
                 "mode": node.get("mode"),
                 "connected": node.get("connected"),
             })
-        
+
         return {
             "connected": connected,
             "disconnected": disconnected,
@@ -747,13 +721,13 @@ class KeeneticUsbStorageSensor(ControllerEntity, SensorEntity):
         device = self._device
         if not device:
             return None
-        
+
         total = device.get("total", 0)
         used = device.get("used", 0)
         free = device.get("free", 0)
-        
+
         percent_used = round((used / total) * 100, 1) if total > 0 else 0
-        
+
         return {
             "device_id": self._device_id,
             "label": device.get("label"),
@@ -763,7 +737,6 @@ class KeeneticUsbStorageSensor(ControllerEntity, SensorEntity):
             "filesystem": device.get("filesystem"),
             "state": device.get("state"),
             "type": device.get("type"),
-            "port": device.get("port"),
             "usb_version": device.get("usb_version"),
             "ejectable": device.get("ejectable"),
             "power_control": device.get("power_control"),
@@ -861,7 +834,7 @@ class KeeneticMeshUsbStorageSensor(MeshEntity, SensorEntity):
 class KeeneticMeshUptimeSensor(MeshEntity, SensorEntity):
     """Mesh node uptime sensor."""
     _attr_has_entity_name = True
-    _attr_translation_key = "mesh_uptime"
+    _attr_translation_key = "uptime"
     _attr_icon = "mdi:timer-outline"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -874,10 +847,6 @@ class KeeneticMeshUptimeSensor(MeshEntity, SensorEntity):
     def unique_id(self) -> str:
         safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
         return f"{safe_cid}_uptime"
-
-    @property
-    def name(self) -> str:
-        return f"Uptime"
 
     @property
     def native_unit_of_measurement(self) -> str:
@@ -899,7 +868,7 @@ class KeeneticMeshUptimeSensor(MeshEntity, SensorEntity):
 class KeeneticMeshClientsSensor(MeshEntity, SensorEntity):
     """Mesh node active clients sensor."""
     _attr_has_entity_name = True
-    _attr_translation_key = "mesh_clients"
+    _attr_translation_key = "connected_clients"
     _attr_icon = "mdi:account-group"
     _attr_state_class = "measurement"
 
@@ -910,14 +879,6 @@ class KeeneticMeshClientsSensor(MeshEntity, SensorEntity):
     def unique_id(self) -> str:
         safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
         return f"{safe_cid}_clients"
-
-    @property
-    def name(self) -> str:
-        node = self._node
-        if node:
-            node_name = node.get("name") or node.get("mac") or self._node_cid
-            return f"Mesh - {node_name} Clients"
-        return f"Mesh - {self._node_cid} Clients"
 
     @property
     def native_value(self) -> int:
@@ -936,7 +897,7 @@ class KeeneticMeshClientsSensor(MeshEntity, SensorEntity):
         node = self._node
         if not node:
             return None
-        
+
         return {
             "cid": self._node_cid,
             "mac": node.get("mac"),
@@ -944,7 +905,7 @@ class KeeneticMeshClientsSensor(MeshEntity, SensorEntity):
             "model": node.get("model"),
             "mode": node.get("mode"),
         }
-    
+
 
 class KeeneticWifi24TemperatureSensor(ControllerEntity, SensorEntity):
     """WiFi 2.4GHz radio temperature sensor."""
@@ -959,20 +920,16 @@ class KeeneticWifi24TemperatureSensor(ControllerEntity, SensorEntity):
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
         ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
         self._band = "2.4GHz"
-        self._interface_prefix = "WifiMaster0"  # Обычно 2.4GHz
+        self._interface_prefix = "WifiMaster0"
 
     @property
     def unique_id(self) -> str:
         return f"{self._entry_id}_wifi_24_temperature"
 
     @property
-    def name(self) -> str:
-        return f"WiFi {self._band} Temperature"
-
-    @property
     def native_value(self) -> float | None:
         interfaces = self.coordinator.data.get("interfaces", {}) or {}
-        
+
         # Ищем интерфейс по префиксу
         for iface_id, iface_data in interfaces.items():
             if iface_id.startswith(self._interface_prefix) and isinstance(iface_data, dict):
@@ -982,7 +939,7 @@ class KeeneticWifi24TemperatureSensor(ControllerEntity, SensorEntity):
                         return float(temp)
                     except (TypeError, ValueError):
                         continue
-        
+
         return None
 
     @property
@@ -1003,20 +960,16 @@ class KeeneticWifi5TemperatureSensor(ControllerEntity, SensorEntity):
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
         ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
         self._band = "5GHz"
-        self._interface_prefix = "WifiMaster1"  # Обычно 5GHz
+        self._interface_prefix = "WifiMaster1"
 
     @property
     def unique_id(self) -> str:
         return f"{self._entry_id}_wifi_5_temperature"
 
     @property
-    def name(self) -> str:
-        return f"WiFi {self._band} Temperature"
-
-    @property
     def native_value(self) -> float | None:
         interfaces = self.coordinator.data.get("interfaces", {}) or {}
-        
+
         for iface_id, iface_data in interfaces.items():
             if iface_id.startswith(self._interface_prefix) and isinstance(iface_data, dict):
                 temp = iface_data.get("temperature")
@@ -1025,13 +978,13 @@ class KeeneticWifi5TemperatureSensor(ControllerEntity, SensorEntity):
                         return float(temp)
                     except (TypeError, ValueError):
                         continue
-        
+
         return None
 
     @property
     def available(self) -> bool:
         return self.native_value is not None
-    
+
 
 class KeeneticInterfaceRxSensor(ControllerEntity, SensorEntity):
     """Сенсор входящего трафика для конкретного интерфейса."""
@@ -1419,10 +1372,6 @@ class KeeneticFirmwareVersionSensor(ControllerEntity, SensorEntity):
         return f"{self._entry_id}_firmware_version"
 
     @property
-    def name(self) -> str:
-        return "Firmware Version"
-
-    @property
     def native_value(self) -> str | None:
         return self._firmware_version
 
@@ -1461,10 +1410,6 @@ class KeeneticMeshFirmwareVersionSensor(MeshEntity, SensorEntity):
         return f"{safe_cid}_firmware_version"
 
     @property
-    def name(self) -> str:
-        return "Firmware Version"
-
-    @property
     def native_value(self) -> str | None:
         node = self._node
         if node:
@@ -1484,3 +1429,116 @@ class KeeneticMeshFirmwareVersionSensor(MeshEntity, SensorEntity):
         if node.get("model"):
             attrs["model"] = node["model"]
         return attrs if attrs else None
+
+class KeeneticLocalIpSensor(ControllerEntity, SensorEntity):
+    """Sensor for local IP address of the router/device."""
+    _attr_has_entity_name = True
+    _attr_name = "IP"
+    _attr_icon = "mdi:ip-network"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry, ip_address: str) -> None:
+        ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
+        self._ip_address = ip_address
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._entry_id}_local_ip"
+
+    @property
+    def native_value(self) -> str | None:
+        return self._ip_address
+
+
+class KeeneticMeshLocalIpSensor(MeshEntity, SensorEntity):
+    """Sensor for local IP address of a mesh node."""
+    _attr_has_entity_name = True
+    _attr_name = "IP"
+    _attr_icon = "mdi:ip-network"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(
+        self, 
+        coordinator: KeeneticCoordinator, 
+        entry: ConfigEntry, 
+        node_cid: str,
+        ip_address: str,
+    ) -> None:
+        MeshEntity.__init__(self, coordinator, entry.entry_id, entry.title, node_cid)
+        self._ip_address = ip_address
+
+    @property
+    def unique_id(self) -> str:
+        safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
+        return f"{safe_cid}_local_ip"
+
+    @property
+    def native_value(self) -> str | None:
+        # Если IP изменился, берем актуальный из данных ноды
+        node = self._node
+        if node and node.get("ip"):
+            return node.get("ip")
+        return self._ip_address
+    
+class KeeneticMeshCpuLoadSensor(MeshEntity, SensorEntity):
+    """Mesh node CPU load sensor."""
+    _attr_has_entity_name = True
+    _attr_translation_key = "cpu_load"
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:cpu-64-bit"
+
+    def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry, node_cid: str) -> None:
+        MeshEntity.__init__(self, coordinator, entry.entry_id, entry.title, node_cid)
+
+    @property
+    def unique_id(self) -> str:
+        safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
+        return f"{safe_cid}_cpu_load"
+
+    @property
+    def native_value(self) -> float | None:
+        node = self._node
+        if node:
+            cpuload = node.get("cpuload")
+            if cpuload is not None:
+                try:
+                    return float(cpuload)
+                except (TypeError, ValueError):
+                    pass
+        return None
+
+
+class KeeneticMeshMemorySensor(MeshEntity, SensorEntity):
+    """Mesh node memory usage percentage sensor."""
+    _attr_has_entity_name = True
+    _attr_translation_key = "memory_usage"
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:memory"
+
+    def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry, node_cid: str) -> None:
+        MeshEntity.__init__(self, coordinator, entry.entry_id, entry.title, node_cid)
+
+    @property
+    def unique_id(self) -> str:
+        safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
+        return f"{safe_cid}_memory"
+
+    @property
+    def native_value(self) -> float | None:
+        node = self._node
+        if node:
+            memory = node.get("memory")
+            if isinstance(memory, str) and "/" in memory:
+                try:
+                    part_used, part_total = memory.split("/", 1)
+                    used = float(part_used)
+                    total = float(part_total)
+                    if total > 0:
+                        return round(used * 100.0 / total, 1)
+                except (ValueError, TypeError):
+                    pass
+        return None
