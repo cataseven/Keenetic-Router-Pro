@@ -80,6 +80,8 @@ async def async_setup_entry(
         node_cid = node.get("cid") or node.get("id")
         node_ip = node.get("ip")
         if node_cid:
+            entities.append(KeeneticMeshCpuLoadSensor(coordinator, entry, node_cid))
+            entities.append(KeeneticMeshMemorySensor(coordinator, entry, node_cid))
             entities.append(KeeneticMeshUptimeSensor(coordinator, entry, node_cid))
             entities.append(KeeneticMeshClientsSensor(coordinator, entry, node_cid))
             entities.append(KeeneticMeshFirmwareVersionSensor(coordinator, entry, node_cid))
@@ -1543,3 +1545,74 @@ class KeeneticMeshLocalIpSensor(MeshEntity, SensorEntity):
         if node and node.get("ip"):
             return node.get("ip")
         return self._ip_address
+    
+class KeeneticMeshCpuLoadSensor(MeshEntity, SensorEntity):
+    """Mesh node CPU load sensor."""
+    _attr_has_entity_name = True
+    _attr_translation_key = "mesh_cpu_load"
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:cpu-64-bit"
+
+    def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry, node_cid: str) -> None:
+        MeshEntity.__init__(self, coordinator, entry.entry_id, entry.title, node_cid)
+
+    @property
+    def unique_id(self) -> str:
+        safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
+        return f"{safe_cid}_cpu_load"
+
+    @property
+    def name(self) -> str:
+        return "CPU Load"
+
+    @property
+    def native_value(self) -> float | None:
+        node = self._node
+        if node:
+            cpuload = node.get("cpuload")
+            if cpuload is not None:
+                try:
+                    return float(cpuload)
+                except (TypeError, ValueError):
+                    pass
+        return None
+
+
+class KeeneticMeshMemorySensor(MeshEntity, SensorEntity):
+    """Mesh node memory usage percentage sensor."""
+    _attr_has_entity_name = True
+    _attr_translation_key = "mesh_memory"
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:memory"
+
+    def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry, node_cid: str) -> None:
+        MeshEntity.__init__(self, coordinator, entry.entry_id, entry.title, node_cid)
+
+    @property
+    def unique_id(self) -> str:
+        safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
+        return f"{safe_cid}_memory"
+
+    @property
+    def name(self) -> str:
+        return "Memory Usage"
+
+    @property
+    def native_value(self) -> float | None:
+        node = self._node
+        if node:
+            memory = node.get("memory")
+            if isinstance(memory, str) and "/" in memory:
+                try:
+                    part_used, part_total = memory.split("/", 1)
+                    used = float(part_used)
+                    total = float(part_total)
+                    if total > 0:
+                        return round(used * 100.0 / total, 1)
+                except (ValueError, TypeError):
+                    pass
+        return None
