@@ -121,5 +121,6 @@ class MeshEntity(CoordinatorEntity):
             self._node,
             self._node_cid,
             host=node_ip,
-            ssl=self.coordinator._client._ssl if hasattr(self.coordinator, '_client') else False,
+            ssl=self.coordinator.client._ssl if hasattr(self.coordinator, 'client') else False,
+            fqdn=node.get("fqdn")
         )

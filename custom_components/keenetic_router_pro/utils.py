@@ -15,7 +15,7 @@ def get_main_device_info(
     """Device info для главного роутера."""
     scheme = "https" if ssl else "http"
 
-    if ndns_domain and ndns_domain.strip():
+    if ndns_domain.strip():
         # Убираем протокол если есть
         clean_domain = ndns_domain.replace("https://", "").replace("http://", "").split("/")[0]
         configuration_url = f"{scheme}://{clean_domain}"
@@ -39,14 +39,19 @@ def get_mesh_device_info(
     node_cid: Optional[str] = None,
     host: Optional[str] = None,
     ssl: bool = False,
+    fqdn: str = None
 ) -> Dict[str, Any]:
     """Device info для Mesh-ноды (связано с главным роутером)."""
     if node and node_cid:
         node_name = node.get("name") or node.get("mac") or node_cid
         node_ip = node.get("ip") or host
 
-        scheme = "https" if ssl else "http"
-        configuration_url = f"{scheme}://{node_ip}" if node_ip else None
+        if fqdn.strip():
+            scheme = "https" if ssl else "http"
+            configuration_url = f"{scheme}://{fqdn}"
+        else:
+            scheme = "https" if ssl else "http"
+            configuration_url = f"{scheme}://{node_ip}" if node_ip else None
 
         return {
             "identifiers": {(DOMAIN, f"mesh_{node_cid}")},

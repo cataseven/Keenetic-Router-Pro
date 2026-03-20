@@ -960,6 +960,7 @@ class KeeneticClient:
                     "firmware_available": member.get("fw-available"),
                     "associations": member.get("associations", 0), 
                     "rci_errors": rci_info.get("errors", 0),
+                    "fqdn": member.get("fqdn")
                 })
 
         except Exception as err:
