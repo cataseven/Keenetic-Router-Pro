@@ -62,15 +62,15 @@ async def async_setup_entry(
     # WiFi 2.4GHz
     entities.append(KeeneticWifi24RxSensor(coordinator, entry))
     entities.append(KeeneticWifi24TxSensor(coordinator, entry))
-    
+
     # WiFi 5GHz
     entities.append(KeeneticWifi5RxSensor(coordinator, entry))
     entities.append(KeeneticWifi5TxSensor(coordinator, entry))
-    
+
     # LAN
     entities.append(KeeneticLanRxSensor(coordinator, entry))
     entities.append(KeeneticLanTxSensor(coordinator, entry))
-    
+
     # WAN
     entities.append(KeeneticWanRxSensor(coordinator, entry))
     entities.append(KeeneticWanTxSensor(coordinator, entry))
@@ -294,7 +294,7 @@ class _BaseWgSensor(ControllerEntity, SensorEntity):
     """WireGuard ortak mantığı."""
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_state_class = SensorStateClass.MEASUREMENT
-    
+
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry, wg_name: str) -> None:
         ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
         self._wg_name = wg_name
@@ -648,7 +648,7 @@ class KeeneticExtenderCountSensor(ControllerEntity, SensorEntity):
         mesh_nodes = self.coordinator.data.get("mesh_nodes", [])
         connected = sum(1 for n in mesh_nodes if n.get("connected", False))
         disconnected = len(mesh_nodes) - connected
-        
+
         node_list = []
         for node in mesh_nodes:
             node_list.append({
@@ -657,7 +657,7 @@ class KeeneticExtenderCountSensor(ControllerEntity, SensorEntity):
                 "mode": node.get("mode"),
                 "connected": node.get("connected"),
             })
-        
+
         return {
             "connected": connected,
             "disconnected": disconnected,
@@ -721,13 +721,13 @@ class KeeneticUsbStorageSensor(ControllerEntity, SensorEntity):
         device = self._device
         if not device:
             return None
-        
+
         total = device.get("total", 0)
         used = device.get("used", 0)
         free = device.get("free", 0)
-        
+
         percent_used = round((used / total) * 100, 1) if total > 0 else 0
-        
+
         return {
             "device_id": self._device_id,
             "label": device.get("label"),
@@ -897,7 +897,7 @@ class KeeneticMeshClientsSensor(MeshEntity, SensorEntity):
         node = self._node
         if not node:
             return None
-        
+
         return {
             "cid": self._node_cid,
             "mac": node.get("mac"),
@@ -905,7 +905,7 @@ class KeeneticMeshClientsSensor(MeshEntity, SensorEntity):
             "model": node.get("model"),
             "mode": node.get("mode"),
         }
-    
+
 
 class KeeneticWifi24TemperatureSensor(ControllerEntity, SensorEntity):
     """WiFi 2.4GHz radio temperature sensor."""
@@ -929,7 +929,7 @@ class KeeneticWifi24TemperatureSensor(ControllerEntity, SensorEntity):
     @property
     def native_value(self) -> float | None:
         interfaces = self.coordinator.data.get("interfaces", {}) or {}
-        
+
         # Ищем интерфейс по префиксу
         for iface_id, iface_data in interfaces.items():
             if iface_id.startswith(self._interface_prefix) and isinstance(iface_data, dict):
@@ -939,7 +939,7 @@ class KeeneticWifi24TemperatureSensor(ControllerEntity, SensorEntity):
                         return float(temp)
                     except (TypeError, ValueError):
                         continue
-        
+
         return None
 
     @property
@@ -969,7 +969,7 @@ class KeeneticWifi5TemperatureSensor(ControllerEntity, SensorEntity):
     @property
     def native_value(self) -> float | None:
         interfaces = self.coordinator.data.get("interfaces", {}) or {}
-        
+
         for iface_id, iface_data in interfaces.items():
             if iface_id.startswith(self._interface_prefix) and isinstance(iface_data, dict):
                 temp = iface_data.get("temperature")
@@ -978,16 +978,17 @@ class KeeneticWifi5TemperatureSensor(ControllerEntity, SensorEntity):
                         return float(temp)
                     except (TypeError, ValueError):
                         continue
-        
+
         return None
 
     @property
     def available(self) -> bool:
         return self.native_value is not None
-    
+
 
 class KeeneticInterfaceRxSensor(ControllerEntity, SensorEntity):
     """Сенсор входящего трафика для конкретного интерфейса."""
+    _attr_has_entity_name = True
     _attr_translation_key = "interface_rx"
     _attr_icon = "mdi:download-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -1041,6 +1042,7 @@ class KeeneticInterfaceRxSensor(ControllerEntity, SensorEntity):
 
 class KeeneticInterfaceTxSensor(ControllerEntity, SensorEntity):
     """Сенсор исходящего трафика для конкретного интерфейса."""
+    _attr_has_entity_name = True
     _attr_translation_key = "interface_tx"
     _attr_icon = "mdi:upload-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -1094,6 +1096,7 @@ class KeeneticInterfaceTxSensor(ControllerEntity, SensorEntity):
 
 class KeeneticWifi24RxSensor(ControllerEntity, SensorEntity):
     """WiFi 2.4GHz RX sensor."""
+    _attr_has_entity_name = True
     _attr_translation_key = "wifi_24_rx"
     _attr_icon = "mdi:download-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -1126,6 +1129,7 @@ class KeeneticWifi24RxSensor(ControllerEntity, SensorEntity):
 
 class KeeneticWifi24TxSensor(ControllerEntity, SensorEntity):
     """WiFi 2.4GHz TX sensor."""
+    _attr_has_entity_name = True
     _attr_translation_key = "wifi_24_tx"
     _attr_icon = "mdi:upload-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -1158,6 +1162,7 @@ class KeeneticWifi24TxSensor(ControllerEntity, SensorEntity):
 
 class KeeneticWifi5RxSensor(ControllerEntity, SensorEntity):
     """WiFi 5GHz RX sensor."""
+    _attr_has_entity_name = True
     _attr_translation_key = "wifi_5_rx"
     _attr_icon = "mdi:download-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -1190,6 +1195,7 @@ class KeeneticWifi5RxSensor(ControllerEntity, SensorEntity):
 
 class KeeneticWifi5TxSensor(ControllerEntity, SensorEntity):
     """WiFi 5GHz TX sensor."""
+    _attr_has_entity_name = True
     _attr_translation_key = "wifi_5_tx"
     _attr_icon = "mdi:upload-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -1222,6 +1228,7 @@ class KeeneticWifi5TxSensor(ControllerEntity, SensorEntity):
 
 class KeeneticLanRxSensor(ControllerEntity, SensorEntity):
     """LAN (GigabitEthernet0) RX sensor."""
+    _attr_has_entity_name = True
     _attr_translation_key = "lan_rx"
     _attr_icon = "mdi:download-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -1254,6 +1261,7 @@ class KeeneticLanRxSensor(ControllerEntity, SensorEntity):
 
 class KeeneticLanTxSensor(ControllerEntity, SensorEntity):
     """LAN (GigabitEthernet0) TX sensor."""
+    _attr_has_entity_name = True
     _attr_translation_key = "lan_tx"
     _attr_icon = "mdi:upload-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -1286,6 +1294,7 @@ class KeeneticLanTxSensor(ControllerEntity, SensorEntity):
 
 class KeeneticWanRxSensor(ControllerEntity, SensorEntity):
     """WAN (GigabitEthernet1/ISP) RX sensor."""
+    _attr_has_entity_name = True
     _attr_translation_key = "wan_rx"
     _attr_icon = "mdi:download-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -1318,6 +1327,7 @@ class KeeneticWanRxSensor(ControllerEntity, SensorEntity):
 
 class KeeneticWanTxSensor(ControllerEntity, SensorEntity):
     """WAN (GigabitEthernet1/ISP) TX sensor."""
+    _attr_has_entity_name = True
     _attr_translation_key = "wan_tx"
     _attr_icon = "mdi:upload-network"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
