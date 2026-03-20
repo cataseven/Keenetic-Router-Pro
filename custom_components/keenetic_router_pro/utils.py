@@ -15,7 +15,7 @@ def get_main_device_info(
     """Device info для главного роутера."""
     scheme = "https" if ssl else "http"
 
-    if ndns_domain.strip():
+    if ndns_domain and ndns_domain.strip():
         # Убираем протокол если есть
         clean_domain = ndns_domain.replace("https://", "").replace("http://", "").split("/")[0]
         configuration_url = f"{scheme}://{clean_domain}"
@@ -46,7 +46,7 @@ def get_mesh_device_info(
         node_name = node.get("name") or node.get("mac") or node_cid
         node_ip = node.get("ip") or host
 
-        if fqdn.strip():
+        if fqdn and fqdn.strip():
             scheme = "https" if ssl else "http"
             configuration_url = f"{scheme}://{fqdn}"
         else:
