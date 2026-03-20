@@ -115,6 +115,12 @@
       },
       "mesh_firmware_version": {
         "name": "Версия прошивки"
+      },
+      "wifi_24_temperature": {
+        "name": "Температура 2.4 ГГц"
+      },
+      "wifi_5_temperature": {
+        "name": "Температура 5 ГГц"
       }
     },
     "binary_sensor": {
@@ -125,9 +131,6 @@
     "button": {
       "reboot": {
         "name": "Перезагрузить роутер"
-      },
-      "mesh_reboot": {
-        "name": "Перезагрузить Mesh узел"
       }
     },
     "select": {
