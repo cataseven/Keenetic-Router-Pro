@@ -90,17 +90,9 @@ An advanced Home Assistant integration for Keenetic routers. Provides mesh netwo
 
 ## 📦 Installation
 
-### Via HACS (Recommended)
+### Via HACS
 
-1. HACS > Integrations > ⋮ > Custom repositories
-2. URL: `https://github.com/YOUR_USERNAME/keenetic_router_pro`
-3. Category: Integration
-4. Search for "Keenetic Router Pro" and install
-5. Restart Home Assistant
-
-### Manual Installation
-
-1. Copy the `keenetic_router_pro` folder into `config/custom_components/`
+1. Search for "Keenetic Router Pro" and install
 2. Restart Home Assistant
 
 ---
@@ -185,12 +177,16 @@ Settings > Devices & Services > Add Integration > **Keenetic Router Pro**
 
 ### 7. Connection Details
 
-| Field    | Description        | Example       |
-| -------- | ------------------ | ------------- |
-| Host     | Router IP address  | `192.168.1.1` |
-| Port     | Web interface port | `100`         |
-| Username | Admin username     | `admin`       |
-| Password | Admin password     | `********`    |
+| Field              | Description                                                      | Example       |
+| ------------------ | ---------------------------------------------------------------- | ------------- |
+| Host               | Router IP address                                                | `192.168.1.1` |
+| Port               | Web interface port                                               | `100`         |
+| Username           | Admin username                                                   | `admin`       |
+| Password           | Admin password                                                   | `********`    |
+| Use Challenge Auth | Enable for newer models (e.g. Hero) that use NDW2 authentication | `off`         |
+
+> [!NOTE]
+> **Use Challenge Auth** is required for newer Keenetic models such as the **Hero** series that use NDW2 challenge-response authentication instead of Basic Auth. If the integration fails to connect on a newer model, try enabling this option. Older models should leave it disabled.
 
 ### 8. Select Devices for Tracking and Other Device based managements
 
@@ -275,12 +271,6 @@ Each mesh node appears as a separate device in Home Assistant with the following
 | Uptime | Node uptime in seconds | — |
 | Clients | Number of associated clients | — |
 | Firmware Version | Current firmware with hardware ID and model details | Diagnostic |
-| USB Storage | USB device info (if connected) | Diagnostic |
-| WiFi 2.4GHz RX / TX | Cumulative traffic in GB | Diagnostic |
-| WiFi 5GHz RX / TX | Cumulative traffic in GB | Diagnostic |
-| LAN RX / TX | Cumulative traffic in GB | Diagnostic |
-| WiFi 2.4GHz Temperature | Radio module temperature | Diagnostic |
-| WiFi 5GHz Temperature | Radio module temperature | Diagnostic |
 
 > **Note:** Traffic and temperature sensors are only created for interfaces that exist on the node. Not all extenders have all interfaces.
 
@@ -351,10 +341,16 @@ automation:
 
 ### Tested Models
 
-* Keenetic Ultra (KN-1810)
-* Keenetic Hopper (KN-3810)
-* Keenetic Buddy 5 (KN-3311)
-* Keenetic Air (KN-1610)
+| Model | Auth Method |
+| ----- | ----------- |
+| Keenetic Ultra (KN-1810) | Basic Auth |
+| Keenetic Hopper (KN-3810) | Basic Auth |
+| Keenetic Buddy 5 (KN-3311) | Basic Auth |
+| Keenetic Air (KN-1610) | Basic Auth |
+| Keenetic Hero (KN-1012) | Challenge Auth (NDW2) |
+
+> [!TIP]
+> Not sure which auth method your router uses? Try **Basic Auth** first (default). If the connection fails, switch to **Challenge Auth**.
 
 ---
 
@@ -365,6 +361,7 @@ automation:
 1. Verify router IP address and port
 2. Verify username and password
 3. Ensure the web interface is enabled on the router
+4. If you have a newer model (e.g. **Hero**), enable **Use Challenge Auth** in the integration settings and try again
 
 ### Entities Not Appearing
 

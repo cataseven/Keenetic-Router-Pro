@@ -9,7 +9,8 @@
           "port": "Порт",
           "username": "Имя пользователя",
           "password": "Пароль",
-          "ssl": "Использовать SSL"
+          "ssl": "Использовать SSL",
+          "use_challenge_auth": "Использовать Challenge Auth (NDW2, требуется для новых моделей, например Hero)"
         }
       },
       "select_clients": {

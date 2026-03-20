@@ -9,7 +9,8 @@
           "port": "Port",
           "username": "Kullanıcı Adı",
           "password": "Şifre",
-          "ssl": "SSL Kullan"
+          "ssl": "SSL Kullan",
+          "use_challenge_auth": "Challenge Auth Kullan (NDW2, Hero gibi yeni modeller için gerekli)"
         }
       },
       "select_clients": {

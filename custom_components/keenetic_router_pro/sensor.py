@@ -43,6 +43,7 @@ async def async_setup_entry(
     # Yeni sensörler
     entities.append(KeeneticWanIpSensor(coordinator, entry))
     entities.append(KeeneticConnectedClientsSensor(coordinator, entry))
+    entities.append(KeeneticRouterClientsSensor(coordinator, entry))
     entities.append(KeeneticDisconnectedClientsSensor(coordinator, entry))
     entities.append(KeeneticExtenderCountSensor(coordinator, entry))
     entities.append(KeeneticPppoeUptimeSensor(coordinator, entry))
@@ -118,6 +119,8 @@ class KeeneticCpuLoadSensor(ControllerEntity, SensorEntity):
     _attr_has_entity_name = True
     _attr_translation_key = "cpu_load"
 
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
         ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
 
@@ -150,6 +153,8 @@ class KeeneticMemoryUsageSensor(ControllerEntity, SensorEntity):
     """RAM kullanım yüzdesi sensörü."""
     _attr_has_entity_name = True
     _attr_translation_key = "memory_usage"
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
         ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
@@ -202,6 +207,8 @@ class KeeneticUptimeSensor(ControllerEntity, SensorEntity):
     _attr_has_entity_name = True
     _attr_translation_key = "uptime"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
         ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
@@ -300,6 +307,7 @@ class KeeneticWanStatusSensor(ControllerEntity, SensorEntity):
 class _BaseWgSensor(ControllerEntity, SensorEntity):
     """WireGuard ortak mantığı."""
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_state_class = SensorStateClass.MEASUREMENT
     
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry, wg_name: str) -> None:
         ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
@@ -453,6 +461,8 @@ class KeeneticPppoeUptimeSensor(ControllerEntity, SensorEntity):
     _attr_icon = "mdi:timer-outline"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
         ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
 
@@ -495,6 +505,8 @@ class KeeneticActiveConnectionsSensor(ControllerEntity, SensorEntity):
     _attr_has_entity_name = True
     _attr_translation_key = "active_connections"
     _attr_icon = "mdi:connection"
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
         ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
@@ -539,6 +551,8 @@ class KeeneticConnectedClientsSensor(ControllerEntity, SensorEntity):
     _attr_translation_key = "connected_clients"
     _attr_icon = "mdi:devices"
 
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
         ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
 
@@ -564,11 +578,67 @@ class KeeneticConnectedClientsSensor(ControllerEntity, SensorEntity):
         }
 
 
+class KeeneticRouterClientsSensor(ControllerEntity, SensorEntity):
+    """Ana router'a doğrudan bağlı cihaz sayısı sensörü."""
+    _attr_has_entity_name = True
+    _attr_translation_key = "router_clients"
+    _attr_icon = "mdi:devices"
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
+        ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._entry_id}_router_clients"
+
+    @property
+    def name(self) -> str:
+        return "Clients"
+
+    @property
+    def native_value(self) -> int:
+        stats = self.coordinator.data.get("client_stats", {})
+        total_connected = stats.get("connected", 0)
+
+        # Mesh node'lara bağlı client sayısını çıkar
+        mesh_nodes = self.coordinator.data.get("mesh_nodes", [])
+        mesh_associations = 0
+        for node in mesh_nodes:
+            try:
+                mesh_associations += int(node.get("associations", 0))
+            except (TypeError, ValueError):
+                pass
+
+        return max(total_connected - mesh_associations, 0)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        stats = self.coordinator.data.get("client_stats", {})
+        mesh_nodes = self.coordinator.data.get("mesh_nodes", [])
+
+        mesh_associations = 0
+        for node in mesh_nodes:
+            try:
+                mesh_associations += int(node.get("associations", 0))
+            except (TypeError, ValueError):
+                pass
+
+        return {
+            "total_connected": stats.get("connected", 0),
+            "mesh_clients": mesh_associations,
+            "per_ap": stats.get("per_ap", {}),
+        }
+
+
 class KeeneticDisconnectedClientsSensor(ControllerEntity, SensorEntity):
     """Bağlı olmayan (bilinen) cihaz sayısı sensörü."""
     _attr_has_entity_name = True
     _attr_translation_key = "disconnected_clients"
     _attr_icon = "mdi:lan-disconnect"
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
         ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
@@ -592,6 +662,8 @@ class KeeneticExtenderCountSensor(ControllerEntity, SensorEntity):
     _attr_has_entity_name = True
     _attr_translation_key = "extender_count"
     _attr_icon = "mdi:access-point-network"
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
         ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
@@ -636,6 +708,7 @@ class KeeneticUsbStorageSensor(ControllerEntity, SensorEntity):
     _attr_has_entity_name = True
     _attr_translation_key = "usb_storage"
     _attr_icon = "mdi:usb-flash-drive"
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry, device_id: str) -> None:
         ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
@@ -719,6 +792,7 @@ class KeeneticMeshUsbStorageSensor(MeshEntity, SensorEntity):
     _attr_has_entity_name = True
     _attr_translation_key = "mesh_usb_storage"
     _attr_icon = "mdi:usb-flash-drive"
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(
         self,
@@ -802,6 +876,8 @@ class KeeneticMeshUptimeSensor(MeshEntity, SensorEntity):
     _attr_translation_key = "mesh_uptime"
     _attr_icon = "mdi:timer-outline"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry, node_cid: str) -> None:
         MeshEntity.__init__(self, coordinator, entry.entry_id, entry.title, node_cid)

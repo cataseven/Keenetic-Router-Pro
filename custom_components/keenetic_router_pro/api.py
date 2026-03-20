@@ -9,6 +9,7 @@ import aiohttp
 import async_timeout
 import asyncio
 import base64
+import hashlib
 import logging
 
 from .const import DOMAIN
@@ -36,6 +37,7 @@ class KeeneticClient:
         port: int = 100,
         ssl: bool = False,
         request_timeout: int = 15,
+        use_challenge_auth: bool = False,
     ) -> None:
         self._host = host
         self._username = username
@@ -43,6 +45,7 @@ class KeeneticClient:
         self._port = port
         self._ssl = ssl
         self._request_timeout = request_timeout
+        self._use_challenge_auth = use_challenge_auth
 
         scheme = "https" if ssl else "http"
         self._base = f"{scheme}://{host}:{port}"
@@ -61,7 +64,10 @@ class KeeneticClient:
     async def async_start(self, session: aiohttp.ClientSession) -> None:
         """Attach an aiohttp session and authenticate."""
         self._session = session
-        await self._async_authenticate()
+        if self._use_challenge_auth:
+            await self._async_authenticate_challenge()
+        else:
+            await self._async_authenticate()
 
     async def _async_authenticate(self) -> None:
         """Perform Basic auth against /rci/, like original ha_keenetic."""
@@ -96,10 +102,128 @@ class KeeneticClient:
             self._port,
         )
 
+    async def _async_authenticate_challenge(self) -> None:
+        """Perform NDW2 challenge-response auth used by newer Keenetic models (e.g. Hero).
+
+        Handshake:
+          1. GET /auth  → 401 with X-NDM-Challenge + X-NDM-Realm headers + Set-Cookie
+          2. Compute:
+               ha1      = md5(username:realm:password)
+               response = sha256(challenge + ha1)
+          3. POST /auth  with JSON {login, password: response}  and the session cookie
+          4. 200 → authenticated; subsequent requests use only the session cookie.
+        """
+        if self._session is None:
+            raise KeeneticAuthError("ClientSession is not set")
+
+        auth_url = f"{self._base}/auth"
+
+        # --- Step 1: GET /auth to obtain challenge & session cookie ---
+        _LOGGER.debug("NDW2 challenge auth: GET %s", auth_url)
+        try:
+            async with async_timeout.timeout(self._request_timeout):
+                get_resp = await self._session.get(auth_url, allow_redirects=False)
+        except aiohttp.ClientError as err:
+            raise KeeneticAuthError(f"Challenge GET failed: {err}") from err
+
+        _LOGGER.debug(
+            "NDW2 challenge GET response: status=%s headers=%s",
+            get_resp.status,
+            dict(get_resp.headers),
+        )
+
+        if get_resp.status not in (200, 401):
+            text = await get_resp.text()
+            raise KeeneticAuthError(
+                f"Unexpected status during challenge GET ({get_resp.status}): {text}"
+            )
+
+        challenge = get_resp.headers.get("X-NDM-Challenge")
+        realm = get_resp.headers.get("X-NDM-Realm", "")
+
+        if not challenge:
+            raise KeeneticAuthError(
+                "Router did not return X-NDM-Challenge header. "
+                "This model may not support Challenge Auth — "
+                "try disabling 'Challenge Auth' and use Basic Auth instead."
+            )
+
+        _LOGGER.debug("NDW2 challenge=%s realm=%s", challenge, realm)
+
+        # Extract session cookie from Set-Cookie header
+        session_cookie: str | None = None
+        raw_cookie = get_resp.headers.get("Set-Cookie", "")
+        for part in raw_cookie.split(";"):
+            part = part.strip()
+            if part.lower().startswith("sysauth=") or part.lower().startswith("sysauth_http="):
+                session_cookie = part
+                break
+        # aiohttp also stores cookies in the session cookie jar automatically
+
+        _LOGGER.debug("NDW2 session cookie: %s", session_cookie)
+
+        # --- Step 2: Compute NDW2 hashes ---
+        # ha1      = md5(username:realm:password)   [hex digest]
+        # response = sha256(challenge + ha1)         [hex digest]
+        ha1 = hashlib.md5(
+            f"{self._username}:{realm}:{self._password}".encode()
+        ).hexdigest()
+        response_hash = hashlib.sha256((challenge + ha1).encode()).hexdigest()
+
+        _LOGGER.debug(
+            "NDW2 hash: ha1(md5)=%s response(sha256)=%s", ha1, response_hash
+        )
+
+        # --- Step 3: POST /auth with credentials ---
+        payload = {"login": self._username, "password": response_hash}
+        post_headers: Dict[str, str] = {"Content-Type": "application/json"}
+
+        _LOGGER.debug("NDW2 challenge: POST %s payload_login=%s", auth_url, self._username)
+
+        try:
+            async with async_timeout.timeout(self._request_timeout):
+                post_resp = await self._session.post(
+                    auth_url,
+                    json=payload,
+                    headers=post_headers,
+                )
+        except aiohttp.ClientError as err:
+            raise KeeneticAuthError(f"Challenge POST failed: {err}") from err
+
+        post_text = await post_resp.text()
+        _LOGGER.debug(
+            "NDW2 challenge POST response: status=%s body=%s",
+            post_resp.status,
+            post_text[:200],
+        )
+
+        if post_resp.status == 401:
+            raise KeeneticAuthError(
+                f"Challenge auth rejected — wrong credentials? (body={post_text!r})"
+            )
+        if post_resp.status not in (200, 204):
+            raise KeeneticAuthError(
+                f"Challenge auth failed (status={post_resp.status}, body={post_text!r})"
+            )
+
+        # aiohttp session cookie jar now holds the authenticated sysauth cookie.
+        # Subsequent requests via self._session will include it automatically.
+        self._auth_header = {}  # No Authorization header needed; cookie is used.
+        self._authenticated = True
+
+        _LOGGER.debug(
+            "Authenticated to Keenetic router at %s:%s (NDW2 challenge OK)",
+            self._host,
+            self._port,
+        )
+
     async def _ensure_auth(self) -> None:
         """Ensure we are authenticated before making an RCI call."""
         if not self._authenticated:
-            await self._async_authenticate()
+            if self._use_challenge_auth:
+                await self._async_authenticate_challenge()
+            else:
+                await self._async_authenticate()
 
     async def _request(
         self,
