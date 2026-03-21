@@ -156,6 +156,7 @@ class KeeneticMemoryUsageSensor(ControllerEntity, SensorEntity):
     _attr_translation_key = "memory_usage"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:memory"
 
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
         ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
@@ -1541,7 +1542,7 @@ class KeeneticMeshSystemStateSensor(ControllerEntity, SensorEntity):
       - "no_nodes": No mesh nodes configured/found
     """
     _attr_has_entity_name = True
-    _attr_translation_key = "mesh_system_state"
+    _attr_name = "Mesh System State"
     _attr_icon = "mdi:access-point-network"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
