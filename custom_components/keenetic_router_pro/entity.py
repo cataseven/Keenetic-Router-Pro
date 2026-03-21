@@ -3,8 +3,8 @@ from typing import Any, Dict, Optional
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.device_registry import DeviceInfo
 from .const import DOMAIN
-from .coordinator import KeeneticCoordinator
-from .utils import get_main_device_info, get_mesh_device_info
+from .coordinator import KeeneticCoordinator, KeeneticPingCoordinator
+from .utils import get_main_device_info, get_mesh_device_info, get_client_device_info
 
 
 class ControllerEntity(CoordinatorEntity):
@@ -124,3 +124,90 @@ class MeshEntity(CoordinatorEntity):
             ssl=self.coordinator._client._ssl if hasattr(self.coordinator, '_client') else False,
             fqdn=node.get("fqdn")
         )
+    
+class ClientEntity(CoordinatorEntity):
+    """Базовый класс для сущностей отслеживаемых клиентов как отдельных устройств."""
+    
+    def __init__(
+        self,
+        coordinator: KeeneticCoordinator,
+        entry_id: str,
+        title: str,
+        mac: str,
+        label: str,
+        initial_ip: Optional[str] = None,
+        ping_coordinator = None,  # Optional, for ping tracking
+    ) -> None:
+        super().__init__(coordinator)
+        self._entry_id = entry_id
+        self._title = title
+        self._mac = mac.lower()
+        self._label = label
+        self._initial_ip = initial_ip
+        self._ping_coordinator = ping_coordinator  # Это должен быть объект, не строка
+    
+    @property
+    def _client(self) -> Optional[Dict[str, Any]]:
+        """Получить данные клиента из coordinator."""
+        clients = self.coordinator.data.get("clients", []) or []
+        for client in clients:
+            if str(client.get("mac") or "").lower() == self._mac:
+                return client
+        return None
+    
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Device info для отслеживаемого клиента как отдельного устройства."""
+        client = self._client
+        return get_client_device_info(
+            entry_id=self._entry_id,
+            mac=self._mac,
+            label=self._label,
+            client=client,
+            initial_ip=self._initial_ip,
+        )
+    
+    @property
+    def ip_address(self) -> Optional[str]:
+        """Get current IP address of the client."""
+        client = self._client
+        if client:
+            ip = client.get("ip")
+            if ip:
+                return str(ip)
+        return self._initial_ip
+    
+    @property
+    def hostname(self) -> Optional[str]:
+        """Get hostname of the client."""
+        client = self._client
+        if not client:
+            return self._label
+        
+        name = client.get("name")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+        h = client.get("hostname")
+        if isinstance(h, str) and h.strip():
+            return h.strip()
+        return self._label
+    
+    @property
+    def _is_apple_device(self) -> bool:
+        """Check if this is likely an Apple device."""
+        name = self._label or ""
+        name_lower = name.lower()
+        return any(kw in name_lower for kw in ("apple", "iphone", "ipad", "macbook", "imac"))
+    
+    @property
+    def is_connected(self) -> bool:
+        """Determine if device is connected."""
+        # Проверяем, что ping_coordinator - это объект, а не строка
+        if self._ping_coordinator and hasattr(self._ping_coordinator, 'data') and not self._is_apple_device:
+            ping_results = self._ping_coordinator.data or {}
+            return ping_results.get(self._mac, False)
+        else:
+            client = self._client
+            if client:
+                return str(client.get("link", "")).lower() == "up"
+            return False

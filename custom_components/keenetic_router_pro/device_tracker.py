@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import DOMAIN, DATA_COORDINATOR, DATA_PING_COORDINATOR, CONF_TRACKED_CLIENTS
 from .coordinator import KeeneticCoordinator, KeeneticPingCoordinator
-from .entity import ControllerEntity
+from .entity import ClientEntity
 
 
 async def async_setup_entry(
@@ -19,10 +19,9 @@ async def async_setup_entry(
     """Set up Keenetic Router Pro device trackers from a config entry."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: KeeneticCoordinator = data[DATA_COORDINATOR]
-    ping_coordinator: KeeneticPingCoordinator = data[DATA_PING_COORDINATOR]
+    ping_coordinator: KeeneticPingCoordinator = data.get(DATA_PING_COORDINATOR)  # Note: get, might not exist
     entities: list[KeeneticClientTracker] = []
 
-    # Sadece config'de belirtilen tracked client'ları ekle
     tracked_clients = entry.data.get(CONF_TRACKED_CLIENTS, [])
 
     if not tracked_clients:
@@ -56,126 +55,107 @@ async def async_setup_entry(
         async_add_entities(entities)
 
 
-class KeeneticClientTracker(ControllerEntity, ScannerEntity):
-    """Device tracker entity representing a tracked client."""
+class KeeneticClientTracker(ClientEntity, ScannerEntity):
+    """Device tracker entity for tracked clients as separate devices."""
     _attr_should_poll = False
-    _attr_entity_category = None  # Diagnostic altında değil, ayrı göster
+    _attr_entity_category = None
+    _attr_has_entity_name = True
 
     def __init__(
         self,
         coordinator: KeeneticCoordinator,
-        ping_coordinator: KeeneticPingCoordinator,
+        ping_coordinator: KeeneticPingCoordinator | None,
         entry: ConfigEntry,
         mac: str,
         label: str,
         initial_ip: str | None = None,
     ) -> None:
-        ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
-        self._main_coordinator = coordinator
-        self._ping_coordinator = ping_coordinator
-        self._mac = mac.lower()
-        self._label = label
-        self._initial_ip = initial_ip
+        # ВАЖНО: порядок аргументов должен соответствовать определению в ClientEntity
+        ClientEntity.__init__(
+            self, 
+            coordinator,      # coordinator
+            entry.entry_id,   # entry_id
+            entry.title,      # title
+            mac,              # mac
+            label,            # label
+            initial_ip,       # initial_ip
+            ping_coordinator  # ping_coordinator (последний!)
+        )
         self._attr_name = label
 
     async def async_added_to_hass(self) -> None:
+        """When entity is added to hass."""
         await super().async_added_to_hass()
         
+        # Listen to main coordinator updates
         self.async_on_remove(
-            self._main_coordinator.async_add_listener(
+            self.coordinator.async_add_listener(
                 self._handle_coordinator_update
             )
         )
-        # Ping coordinator'ı da dinle — her ping cycle'da state güncellensin
-        self.async_on_remove(
-            self._ping_coordinator.async_add_listener(
-                self._handle_ping_update
+        
+        # Listen to ping coordinator updates if available
+        if self._ping_coordinator and hasattr(self._ping_coordinator, 'async_add_listener'):
+            self.async_on_remove(
+                self._ping_coordinator.async_add_listener(
+                    self._handle_ping_update
+                )
             )
-        )
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        client = self._client_from_main
+        """Handle main coordinator updates."""
+        client = self._client
         if client:
             ip = client.get("ip")
-            if ip:
+            if ip and self._ping_coordinator and hasattr(self._ping_coordinator, 'update_client_ip'):
                 self._ping_coordinator.update_client_ip(self._mac, str(ip))
-        
         self.async_write_ha_state()
 
     @callback
     def _handle_ping_update(self) -> None:
-        """Ping coordinator güncellendiğinde state'i yaz."""
+        """Handle ping coordinator updates."""
         self.async_write_ha_state()
 
     @property
     def unique_id(self) -> str:
+        """Return unique ID for entity."""
         return f"{self._entry_id}_client_{self._mac}"
 
     @property
     def mac_address(self) -> str:
+        """Return MAC address."""
         return self._mac
 
     @property
-    def ip_address(self) -> str | None:
-        client = self._client_from_main
-        if client:
-            ip = client.get("ip")
-            if ip:
-                return str(ip)
-        
-        return self._initial_ip
-
-    @property
-    def hostname(self) -> str | None:
-        client = self._client_from_main
-        if not client:
-            return self._label
-
-        name = client.get("name")
-        if isinstance(name, str) and name.strip():
-            return name.strip()
-        h = client.get("hostname")
-        if isinstance(h, str) and h.strip():
-            return h.strip()
-        return self._label
-
-    @property
     def source_type(self) -> SourceType:
+        """Return source type."""
         return SourceType.ROUTER
 
     @property
-    def _is_apple_device(self) -> bool:
-        name = self._label or ""
-        name_lower = name.lower()
-        return any(kw in name_lower for kw in ("apple", "iphone", "ipad"))
-
-    @property
     def is_connected(self) -> bool:
-        if self._is_apple_device:
-            client = self._client_from_main
-            if client:
-                return str(client.get("link", "")).lower() == "up"
-            return False
-        else:
-            ping_results = self._ping_coordinator.data or {}
-            return ping_results.get(self._mac, False) 
+        """Return true if device is connected."""
+        return super().is_connected
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
-        client = self._client_from_main
-        ping_results = self._ping_coordinator.data or {}
+        """Return state attributes."""
+        client = self._client
         
-        if self._is_apple_device:
-            client_link = (self._client_from_main or {}).get("link", "unknown")
-            tracking_info: dict[str, Any] = {
-                "tracking_method": "link_state",
-                "link_status": client_link,
-            }
-        else:
+        tracking_info: dict[str, Any] = {}
+        
+        # Проверяем, что ping_coordinator - это объект
+        if self._ping_coordinator and hasattr(self._ping_coordinator, 'data') and not self._is_apple_device:
+            ping_results = self._ping_coordinator.data or {}
             tracking_info = {
                 "tracking_method": "ping",
                 "ping_status": "reachable" if ping_results.get(self._mac, False) else "unreachable",
+            }
+        else:
+            client_link = (client or {}).get("link", "unknown")
+            tracking_info = {
+                "tracking_method": "link_state",
+                "link_status": client_link,
             }
 
         attrs: dict[str, Any] = {
@@ -190,16 +170,20 @@ class KeeneticClientTracker(ControllerEntity, ScannerEntity):
         iface = client.get("interface")
         if isinstance(iface, dict):
             iface_name = iface.get("name") or iface.get("id")
+            iface_type = iface.get("type")
         else:
             iface_name = iface
+            iface_type = None
 
         attrs.update({
             "ip": client.get("ip") or self._initial_ip,
             "hostname": client.get("hostname"),
             "interface": iface_name,
+            "interface_type": iface_type,
             "ssid": client.get("ssid"),
             "rssi": client.get("rssi"),
             "txrate": client.get("txrate"),
+            "rxrate": client.get("rxrate"),
             "access": client.get("access"),
             "priority": client.get("priority"),
             "active": client.get("active"),
@@ -207,13 +191,7 @@ class KeeneticClientTracker(ControllerEntity, ScannerEntity):
             "last-seen": client.get("last-seen"),
             "uptime": client.get("uptime"),
             "registered": client.get("registered"),
+            "device_type": client.get("device_type"),
+            "vendor": client.get("vendor"),
         })
         return {k: v for k, v in attrs.items() if v is not None}
-
-    @property
-    def _client_from_main(self) -> dict[str, Any] | None:
-        clients = self._main_coordinator.data.get("clients", []) or []
-        for item in clients:
-            if str(item.get("mac") or "").lower() == self._mac:
-                return item
-        return None
