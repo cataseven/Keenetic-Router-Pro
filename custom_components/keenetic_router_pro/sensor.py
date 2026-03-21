@@ -75,6 +75,8 @@ async def async_setup_entry(
     entities.append(KeeneticWanRxSensor(coordinator, entry))
     entities.append(KeeneticWanTxSensor(coordinator, entry))
 
+    entities.append(KeeneticMeshSystemStateSensor(coordinator, entry))
+
     mesh_nodes = coordinator.data.get("mesh_nodes", [])
     for node in mesh_nodes:
         node_cid = node.get("cid") or node.get("id")
@@ -120,7 +122,8 @@ class KeeneticCpuLoadSensor(ControllerEntity, SensorEntity):
     """CPU yükü sensörü."""
     _attr_has_entity_name = True
     _attr_translation_key = "cpu_load"
-
+    _attr_icon = "mdi:cpu-64-bit"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
@@ -151,7 +154,7 @@ class KeeneticMemoryUsageSensor(ControllerEntity, SensorEntity):
     """RAM kullanım yüzdesi sensörü."""
     _attr_has_entity_name = True
     _attr_translation_key = "memory_usage"
-
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
@@ -1527,3 +1530,102 @@ class KeeneticMeshMemorySensor(MeshEntity, SensorEntity):
                 except (ValueError, TypeError):
                     pass
         return None
+    
+class KeeneticMeshSystemStateSensor(ControllerEntity, SensorEntity):
+    """Mesh system overall state sensor.
+    
+    States:
+      - "ok":       All mesh nodes are connected and working
+      - "problem":  Some nodes are disconnected (partial failure)
+      - "down":     All mesh nodes are disconnected (system down)
+      - "no_nodes": No mesh nodes configured/found
+    """
+    _attr_has_entity_name = True
+    _attr_translation_key = "mesh_system_state"
+    _attr_icon = "mdi:access-point-network"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: KeeneticCoordinator, entry: ConfigEntry) -> None:
+        ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._entry_id}_mesh_system_state"
+
+    @property
+    def native_value(self) -> str:
+        """Return the overall mesh system state."""
+        mesh_nodes = self.coordinator.data.get("mesh_nodes", [])
+        
+        if not mesh_nodes:
+            return "no_nodes"
+        
+        connected = sum(1 for node in mesh_nodes if node.get("connected", False))
+        total = len(mesh_nodes)
+        
+        if connected == 0:
+            return "down"
+        elif connected < total:
+            return "problem"
+        else:
+            return "ok"
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on current state."""
+        state = self.native_value
+        if state == "ok":
+            return "mdi:check-network"
+        elif state == "problem":
+            return "mdi:close-network"
+        elif state == "down":
+            return "mdi:network-off"
+        else:
+            return "mdi:help--network"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return detailed mesh system information."""
+        mesh_nodes = self.coordinator.data.get("mesh_nodes", [])
+        
+        if not mesh_nodes:
+            return {
+                "total_nodes": 0,
+                "connected_nodes": 0,
+                "disconnected_nodes": 0,
+                "nodes": [],
+            }
+        
+        connected = 0
+        disconnected = 0
+        nodes_detail = []
+        
+        for node in mesh_nodes:
+            is_connected = node.get("connected", False)
+            if is_connected:
+                connected += 1
+            else:
+                disconnected += 1
+            
+            nodes_detail.append({
+                "name": node.get("name") or node.get("mac", "Unknown"),
+                "mac": node.get("mac"),
+                "ip": node.get("ip"),
+                "model": node.get("model"),
+                "mode": node.get("mode"),
+                "connected": is_connected,
+                "firmware": node.get("firmware"),
+                "associations": node.get("associations", 0),
+            })
+        
+        total = len(mesh_nodes)
+        health_percent = round((connected / total) * 100, 1) if total > 0 else 0
+        
+        return {
+            "total_nodes": total,
+            "connected_nodes": connected,
+            "disconnected_nodes": disconnected,
+            "health_percent": health_percent,
+            "state": self.native_value,
+            "nodes": nodes_detail,
+        }
