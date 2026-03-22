@@ -943,6 +943,20 @@ class KeeneticClient:
                     and member.get("internet-available", False)
                 )
 
+                ports = member.get("port", [])
+                normalized_ports = []
+                for port in ports:
+                    if isinstance(port, dict):
+                        normalized_port = {
+                            "label": port.get("label"),
+                            "appearance": port.get("appearance"),
+                            "link": port.get("link"),
+                        }
+                        if port.get("link") == "up":
+                            normalized_port["speed"] = port.get("speed")
+                            normalized_port["duplex"] = port.get("duplex")
+                        normalized_ports.append(normalized_port)
+
                 nodes.append({
                     "id": cid,
                     "cid": cid,
@@ -961,7 +975,9 @@ class KeeneticClient:
                     "firmware_available": member.get("fw-available"),
                     "associations": member.get("associations", 0), 
                     "rci_errors": rci_info.get("errors", 0),
-                    "fqdn": member.get("fqdn")
+                    "fqdn": member.get("fqdn"),
+                    "port": normalized_ports,
+                    "backhaul": member.get("backhaul"),
                 })
 
         except Exception as err:

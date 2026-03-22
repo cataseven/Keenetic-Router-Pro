@@ -50,6 +50,7 @@ from .mesh import (
     KeeneticMeshClientsSensor,
     KeeneticMeshFirmwareVersionSensor,
     KeeneticMeshLocalIpSensor,
+    KeeneticMeshPortSensor
 )
 from .traffic import (
     KeeneticLanRxSensor,
@@ -140,6 +141,11 @@ async def async_setup_entry(
             entities.append(KeeneticMeshFirmwareVersionSensor(coordinator, entry, node_cid))
             if node_ip:
                 entities.append(KeeneticMeshLocalIpSensor(coordinator, entry, node_cid, node_ip))
+            ports = node.get("port", [])
+            for port in ports:
+                port_label = port.get("label")
+                if port_label is not None:
+                    entities.append(KeeneticMeshPortSensor(coordinator, entry, node_cid, port_label))
 
     # WireGuard profilleri için sensörler
     wg_profiles = coordinator.data.get("wireguard", {}).get("profiles", {})

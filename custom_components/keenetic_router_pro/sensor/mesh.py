@@ -310,3 +310,76 @@ class KeeneticMeshFirmwareVersionSensor(MeshEntity, SensorEntity):
         if node.get("model"):
             attrs["model"] = node["model"]
         return attrs if attrs else None
+    
+class KeeneticMeshPortSensor(MeshEntity, SensorEntity):
+    """Individual mesh node port sensor."""
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:ethernet-port"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(
+        self,
+        coordinator: KeeneticCoordinator,
+        entry: ConfigEntry,
+        node_cid: str,
+        port_label: str,
+    ) -> None:
+        """Initialize individual port sensor."""
+        MeshEntity.__init__(self, coordinator, entry.entry_id, entry.title, node_cid)
+        self._port_label = port_label
+
+    @property
+    def name(self) -> str:
+        """Return name for the sensor."""
+        return f"Port {self._port_label}"
+
+    @property
+    def unique_id(self) -> str:
+        """Return unique ID for the sensor."""
+        safe_cid = self._node_cid.replace("-", "_").replace(":", "_")[:16]
+        return f"{safe_cid}_port_{self._port_label}_v2"
+
+    @property
+    def native_value(self) -> str:
+        """Return port state."""
+        node = self._node
+        if not node:
+            return "unknown"
+
+        ports = node.get("port", [])
+        for port in ports:
+            if port.get("label") == self._port_label:
+                return port.get("link", "unknown")
+
+        return "not_found"
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on port state."""
+        state = self.native_value
+        if state == "up":
+            return "mdi:ethernet-cable"
+        if state == "down":
+            return "mdi:ethernet-off"
+        return "mdi:ethernet"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return additional port attributes."""
+        node = self._node
+        if not node:
+            return None
+
+        ports = node.get("port", [])
+        for port in ports:
+            if port.get("label") == self._port_label:
+                attrs = {
+                    "label": port.get("label"),
+                    "appearance": port.get("appearance"),
+                }
+                if port.get("link") == "up":
+                    attrs["speed"] = port.get("speed")
+                    attrs["duplex"] = port.get("duplex")
+                return attrs
+
+        return None
