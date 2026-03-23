@@ -38,15 +38,11 @@ async def async_setup_entry(
         async_add_entities(images)
         return
 
-    # Получаем список mesh nodes для определения, какие интерфейсы не от контроллера
     mesh_nodes = coordinator.data.get("mesh_nodes", [])
-    
-    # Собираем IP адреса mesh nodes
     mesh_ips = {node.get("ip") for node in mesh_nodes if node.get("ip")}
     
     _LOGGER.debug("Found mesh nodes IPs: %s", mesh_ips)
 
-    # Находим основную и гостевую сети
     main_network = None
     guest_network = None
     
@@ -57,9 +53,8 @@ async def async_setup_entry(
             
         interface_id = wifi_network.get("id", "")
         description = wifi_network.get("description", "").lower()
-        
-        # Проверяем, принадлежит ли интерфейс mesh ноде
         is_mesh = False
+
         for mesh_ip in mesh_ips:
             if mesh_ip in interface_id or mesh_ip in str(wifi_network):
                 is_mesh = True
@@ -68,26 +63,22 @@ async def async_setup_entry(
         if is_mesh:
             _LOGGER.debug("Skipping mesh node interface: %s", interface_id)
             continue
-        
-        # Определяем гостевую сеть
+
         is_guest = (
             "guest" in ssid.lower() or 
             "guest" in description or
-            "AccessPoint1" in interface_id  # Keenetic часто использует AccessPoint1 для гостевой
+            "AccessPoint1" in interface_id  
         )
         
         if is_guest:
-            # Если нашли гостевую сеть, берем первую попавшуюся (обычно 2.4 GHz)
             if guest_network is None:
                 guest_network = wifi_network
                 _LOGGER.debug("Found guest network: %s (SSID: %s)", interface_id, ssid)
         else:
-            # Это основная сеть
             if main_network is None:
                 main_network = wifi_network
                 _LOGGER.debug("Found main network: %s (SSID: %s)", interface_id, ssid)
 
-    # Создаем QR код для основной сети
     if main_network:
         _LOGGER.info("Creating QR code for main Wi-Fi network: %s", main_network.get("ssid"))
         images.append(
@@ -101,7 +92,6 @@ async def async_setup_entry(
     else:
         _LOGGER.warning("No main Wi-Fi network found")
 
-    # Создаем QR код для гостевой сети
     if guest_network:
         _LOGGER.info("Creating QR code for guest Wi-Fi network: %s", guest_network.get("ssid"))
         images.append(
@@ -154,20 +144,10 @@ class KeeneticQrWiFiImageEntity(CoordinatorEntity[KeeneticCoordinator], ImageEnt
         self._entry = entry
         self._network_type = network_type
         self._image_bytes: bytes | None = None
-        
-        # Try to get password from the interface data
         self._password = self._get_password_from_interfaces()
-
-        # Set entity properties
         self._attr_device_info = self._get_device_info()
-        
-        # Create unique ID
         self._attr_unique_id = f"{entry.entry_id}_wifi_qr_{network_type}"
-        
-        # Set translation key for proper naming
         self._attr_translation_key = f"qr_wifi_{network_type}"
-        
-        # Set translation placeholders
         self._attr_translation_placeholders = {
             "ssid": wifi_network.get("ssid", "Wi-Fi"),
         }
@@ -186,24 +166,19 @@ class KeeneticQrWiFiImageEntity(CoordinatorEntity[KeeneticCoordinator], ImageEnt
             
             if interface_id and interface_id in interfaces:
                 iface_data = interfaces[interface_id]
-                # Look for password in various places
-                # In Keenetic API, password might be in authentication section
                 auth = iface_data.get("authentication", {})
                 if auth:
                     wpa_psk = auth.get("wpa-psk", {})
                     if wpa_psk and wpa_psk.get("psk"):
                         return wpa_psk.get("psk")
-                
-                # Or directly in the interface
+
                 if iface_data.get("password"):
                     return iface_data.get("password")
-                
-                # Or in wpa section
+
                 wpa = iface_data.get("wpa", {})
                 if wpa and wpa.get("psk"):
                     return wpa.get("psk")
-                
-                # Try to get from any AccessPoint interface with same SSID
+
                 for iface_id, iface in interfaces.items():
                     if isinstance(iface, dict) and iface.get("ssid") == self._wifi_network.get("ssid"):
                         auth = iface.get("authentication", {})
@@ -217,7 +192,6 @@ class KeeneticQrWiFiImageEntity(CoordinatorEntity[KeeneticCoordinator], ImageEnt
 
     def _get_device_info(self) -> dict[str, Any]:
         """Get device info for the entity."""
-        # Get system info from coordinator
         system_info = self.coordinator.data.get("system", {})
         host = getattr(self.coordinator.client, '_host', 'unknown')
         
@@ -237,25 +211,17 @@ class KeeneticQrWiFiImageEntity(CoordinatorEntity[KeeneticCoordinator], ImageEnt
             return None
 
         try:
-            # Try to get fresh password from coordinator
             password = self._get_password_from_interfaces()
-            
-            # Create QR code string according to Wi-Fi standard
             if password:
-                # WPA/WPA2 network with password
                 qr_string = f"WIFI:S:{ssid};T:WPA;P:{password};;"
                 _LOGGER.debug("Generating QR code with password for %s network: %s", 
                              self._network_type, ssid)
             else:
-                # Open network without password
                 qr_string = f"WIFI:S:{ssid};T:nopass;;;"
                 _LOGGER.debug("Generating QR code without password for %s network: %s", 
                              self._network_type, ssid)
 
-            # Generate QR code
             code = pyqrcode.create(qr_string)
-            
-            # Create PNG in memory
             buffer = io.BytesIO()
             code.png(buffer, scale=10)
             self._image_bytes = buffer.getvalue()
@@ -276,11 +242,7 @@ class KeeneticQrWiFiImageEntity(CoordinatorEntity[KeeneticCoordinator], ImageEnt
         """Handle updated data from the coordinator."""
         if not self.coordinator.data:
             return
-
-        # Get updated WiFi networks
         wifi_networks = self.coordinator.data.get("wifi", [])
-        
-        # Find updated network by SSID and type
         current_ssid = self._wifi_network.get("ssid")
         updated_network = None
         
@@ -288,7 +250,6 @@ class KeeneticQrWiFiImageEntity(CoordinatorEntity[KeeneticCoordinator], ImageEnt
             if net.get("ssid") != current_ssid:
                 continue
                 
-            # Check if it matches the network type
             is_guest = self._is_guest_network(net)
             if (self._network_type == "guest" and is_guest) or \
                (self._network_type == "main" and not is_guest):
@@ -298,7 +259,6 @@ class KeeneticQrWiFiImageEntity(CoordinatorEntity[KeeneticCoordinator], ImageEnt
         if not updated_network:
             return
 
-        # Check if SSID or enabled state changed
         old_ssid = self._wifi_network.get("ssid")
         new_ssid = updated_network.get("ssid")
         old_enabled = self._wifi_network.get("enabled")
@@ -314,7 +274,7 @@ class KeeneticQrWiFiImageEntity(CoordinatorEntity[KeeneticCoordinator], ImageEnt
                 new_enabled,
             )
             self._wifi_network = updated_network
-            self._image_bytes = None  # Invalidate cached image
+            self._image_bytes = None  
             self._attr_image_last_updated = dt_util.utcnow()
 
         super()._handle_coordinator_update()
@@ -348,7 +308,6 @@ class KeeneticQrWiFiImageEntity(CoordinatorEntity[KeeneticCoordinator], ImageEnt
             "enabled": self._wifi_network.get("enabled", False),
             "network_type": self._network_type,
             "band": self._wifi_network.get("band"),
-            # Don't include password in attributes for security
         }
 
     @property
