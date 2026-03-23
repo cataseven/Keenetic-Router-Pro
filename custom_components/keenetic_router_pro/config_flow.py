@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlparse
 
 import voluptuous as vol
 
@@ -17,6 +18,7 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.service_info.ssdp import SsdpServiceInfo
 
 import logging
 
@@ -78,6 +80,34 @@ class KeeneticRouterProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._title: str = ""
         self._client: KeeneticClient | None = None
         self._available_clients: list[dict[str, Any]] = []
+        self._discovered_host: str | None = None
+
+    async def async_step_ssdp(self, discovery_info: SsdpServiceInfo) -> FlowResult:
+        """Handle a discovered Keenetic router via SSDP."""
+        # Extract hostname from SSDP location URL
+        hostname = urlparse(discovery_info.ssdp_location).hostname
+        if not hostname:
+            return self.async_abort(reason="no_host")
+
+        # Use serial number as unique ID if available, otherwise use hostname
+        unique_id = discovery_info.upnp.get("serialNumber", hostname)
+        await self.async_set_unique_id(unique_id)
+        self._abort_if_unique_id_configured(updates={CONF_HOST: hostname})
+
+        # Store discovered host for later use
+        self._discovered_host = hostname
+
+        # Set context title for UI display
+        friendly_name = discovery_info.upnp.get("friendlyName", "Keenetic Router")
+        self.context["title_placeholders"] = {
+            "name": friendly_name,
+            "host": hostname
+        }
+
+        _LOGGER.debug("Discovered Keenetic router via SSDP: %s at %s", friendly_name, hostname)
+
+        # Proceed to user step with pre-filled host
+        return await self.async_step_user()
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """İlk adım: IP, kullanıcı adı, şifre al."""
@@ -85,6 +115,10 @@ class KeeneticRouterProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             try:
+                # Use discovered host if available and not overridden
+                if self._discovered_host and user_input.get(CONF_HOST) == "192.168.1.1":
+                    user_input[CONF_HOST] = self._discovered_host
+                    
                 info = await _async_validate_input(self.hass, user_input)
             except KeeneticAuthError as err:
                 _LOGGER.error("Authentication failed: %s", err)
@@ -121,9 +155,24 @@ class KeeneticRouterProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 # Client varsa seçim adımına geç
                 return await self.async_step_select_clients()
 
+        # Prepare default host value
+        default_host = self._discovered_host or "192.168.1.1"
+
+        # Update schema with discovered host
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_HOST, default=default_host): str,
+                vol.Optional(CONF_PORT, default=DEFAULT_PORT): int,
+                vol.Required(CONF_USERNAME, default="admin"): str,
+                vol.Required(CONF_PASSWORD): str,
+                vol.Optional(CONF_SSL, default=DEFAULT_SSL): bool,
+                vol.Optional(CONF_USE_CHALLENGE_AUTH, default=False): bool,
+            }
+        )
+
         return self.async_show_form(
             step_id="user",
-            data_schema=STEP_USER_DATA_SCHEMA,
+            data_schema=schema,
             errors=errors,
         )
 

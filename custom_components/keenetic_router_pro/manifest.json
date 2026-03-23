@@ -9,5 +9,15 @@
   "issue_tracker": "https://github.com/cataseven/Keenetic-Router-Pro/issues",
   "loggers": ["custom_components.keenetic_api"],
   "requirements": ["icmplib>=3.0"],
+  "ssdp": [
+    {
+      "st": "urn:schemas-upnp-org:device:InternetGatewayDevice:1",
+      "manufacturer": "Keenetic Ltd."
+    },
+    {
+      "st": "urn:schemas-upnp-org:device:InternetGatewayDevice:1",
+      "manufacturer": "ZyXEL Communications Corp."
+    }
+  ],
   "version": "1.1.9"
 }
