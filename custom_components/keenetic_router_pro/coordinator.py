@@ -48,6 +48,22 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         interfaces = await self.client.async_get_interfaces()
 
         wifi = await self.client.async_get_wifi_networks(interfaces=interfaces)
+        
+        # Fetch WiFi passwords for QR code generation (cache - only fetch if not yet known)
+        wifi_passwords: dict[str, str] = {}
+        if self.data:
+            wifi_passwords = dict(self.data.get("wifi_passwords", {}))
+        
+        for net in wifi:
+            iface_id = net.get("id")
+            ssid = net.get("ssid")
+            if iface_id and ssid and iface_id not in wifi_passwords:
+                try:
+                    password = await self.client.async_get_wifi_password(iface_id)
+                    if password:
+                        wifi_passwords[iface_id] = password
+                except Exception:
+                    pass
         wireguard = await self.client.async_get_wireguard_status(interfaces=interfaces)
         vpn_tunnels = await self.client.async_get_vpn_tunnels(interfaces=interfaces)
         clients = await self.client.async_get_clients()
@@ -64,6 +80,9 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Ana router USB
         usb_storage = await self.client.async_get_usb_storage()
+
+        # Ana router port bilgileri
+        port_info = await self.client.async_get_port_info(interfaces=interfaces)
 
         # Mesh node USB bilgilerini topla
         # Her member'ın kendi IP'sine doğrudan bağlanıp USB sorgusu yapar
@@ -99,6 +118,7 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "traffic_stats": traffic_stats,
             "interfaces": interfaces,
             "wifi": wifi,
+            "wifi_passwords": wifi_passwords,
             "wireguard": wireguard,
             "vpn_tunnels": vpn_tunnels,
             "clients": clients,
@@ -109,6 +129,7 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "ndns": ndns_info,
             "host_policies": host_policies,
             "usb_storage": usb_storage,
+            "port_info": port_info,
             "mesh_usb": mesh_usb,
             "new_clients": new_macs,  # Yeni bağlanan MAC'ler
         }
