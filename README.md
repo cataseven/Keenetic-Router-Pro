@@ -1,7 +1,7 @@
 # Keenetic Router Pro - Home Assistant Integration
 
 [![hacs\_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
-[![version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/)
+[![version](https://img.shields.io/badge/version-1.2.0-blue.svg)](https://github.com/)
 
 <a href="https://www.buymeacoffee.com/cataseven" target="_blank">
   <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 60px !important; width: 217px !important;" >
@@ -66,6 +66,19 @@ An advanced Home Assistant integration for Keenetic routers. Provides mesh netwo
 * **WiFi radio temperature** (2.4GHz / 5GHz)
 * Active connections count
 * USB storage detection
+
+### 🔌 Port Monitoring
+
+* **Physical port status** for the main router and all mesh nodes
+* Link state (up/down), speed (100/1000 Mbps), and duplex mode per port
+* Includes LAN ports, WAN/ISP port, and SFP port
+
+### 📱 Wi-Fi QR Code
+
+* **Scannable QR code** image entity for your main Wi-Fi network
+* Scan with any phone camera to **connect automatically** — no manual password entry needed
+* Guest Wi-Fi QR code (if guest network is configured)
+* QR code updates automatically when SSID or password changes
 
 ### 👥 Client Management
 
@@ -220,6 +233,14 @@ During setup, you can choose which devices should be monitored via ping.
 | LAN RX / TX | Cumulative traffic in GB | Diagnostic |
 | WAN RX / TX | Cumulative traffic in GB | Diagnostic |
 | USB Storage | USB device info (if connected) | Diagnostic |
+| Port 0–4 | Physical port link state, speed, and duplex | Diagnostic |
+
+#### Images
+
+| Entity | Description |
+| ------ | ----------- |
+| Wi-Fi QR Code | Scannable QR code to connect to main Wi-Fi network |
+| Guest Wi-Fi QR Code | Scannable QR code to connect to guest network (if configured) |
 
 #### Binary Sensors
 
@@ -271,6 +292,7 @@ Each mesh node appears as a separate device in Home Assistant with the following
 | Uptime | Node uptime in seconds | — |
 | Clients | Number of associated clients | — |
 | Firmware Version | Current firmware with hardware ID and model details | Diagnostic |
+| Port (per port) | Physical port link state, speed, and duplex | Diagnostic |
 
 > **Note:** Traffic and temperature sensors are only created for interfaces that exist on the node. Not all extenders have all interfaces.
 
