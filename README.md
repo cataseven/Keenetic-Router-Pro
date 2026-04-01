@@ -1,7 +1,7 @@
 # Keenetic Router Pro - Home Assistant Integration
 ![Downloads](https://img.shields.io/github/downloads/cataseven/Keenetic-Router-Pro/total?color=41BDF5&logo=home-assistant&label=Downloads&suffix=%20downloads&style=for-the-badge)
 [![hacs\_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
-[![version](https://img.shields.io/badge/version-1.2.0-blue.svg)](https://github.com/)
+[![version](https://img.shields.io/badge/version-1.3.0-blue.svg)](https://github.com/)
 
 <a href="https://www.buymeacoffee.com/cataseven" target="_blank">
   <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 60px !important; width: 217px !important;" >
@@ -35,7 +35,7 @@ An advanced Home Assistant integration for Keenetic routers. Provides mesh netwo
 ### 🔄 Firmware Updates
 
 * **Update entity** for the main router (with install + progress support)
-* **Update entity** for each mesh node (info-only)
+* **Update entity** for each mesh node (with install support)
 * Firmware version sensor (current version, channel, architecture details)
 * Binary sensor for update availability
 
@@ -307,7 +307,7 @@ Each mesh node appears as a separate device in Home Assistant with the following
 
 | Entity | Description |
 | ------ | ----------- |
-| Firmware Update | Shows current/available version (info-only, no remote install) |
+| Firmware Update | Shows current/available version with install support |
 
 #### Buttons
 
@@ -370,6 +370,7 @@ automation:
 | Keenetic Buddy 5 (KN-3311) | Basic Auth |
 | Keenetic Air (KN-1610) | Basic Auth |
 | Keenetic Hero (KN-1012) | Challenge Auth (NDW2) |
+| Keenetic Titan (KN-1812) | Basic Auth |
 
 > [!TIP]
 > Not sure which auth method your router uses? Try **Basic Auth** first (default). If the connection fails, switch to **Challenge Auth**.
