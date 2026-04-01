@@ -392,9 +392,14 @@ class KeeneticClient:
         data = await self._rci_get("show/system")
         return data or {}
 
-    async def async_get_version_info(self) -> Dict[str, Any]:
+    async def async_get_current_version_info(self) -> Dict[str, Any]:
         """Return version info"""
         data = await self._rci_get("show/version")
+        return data or {}
+    
+    async def async_get_available_version_info(self) -> Dict[str, Any]:
+        """Return version info"""
+        data = await self._rci_get("components/check-update")
         return data or {}
 
     async def async_get_port_info(self, interfaces: Dict[str, Any] | None = None) -> List[Dict[str, Any]]:
