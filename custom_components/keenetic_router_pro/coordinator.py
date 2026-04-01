@@ -41,8 +41,11 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self) -> dict[str, Any]:
         """Router'dan verileri çek."""
         system = await self.client.async_get_system_info()
-        version = await self.client.async_get_version_info()
+        version = await self.client.async_get_current_version_info()
+        version_available = await self.client.async_get_available_version_info()
         merged_system = {**system, **version}
+        merged_system["release-available"] = version_available.get("title") or version_available.get("release")
+        merged_system["fw-update-sandbox"] = version_available.get("sandbox")
 
         # Interface verisini bir kez çek, tüm metotlara paylaştır
         interfaces = await self.client.async_get_interfaces()
