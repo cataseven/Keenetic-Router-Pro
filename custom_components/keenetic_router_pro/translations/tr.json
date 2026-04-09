@@ -37,7 +37,8 @@
         "title": "İzlenen Cihazları Yapılandır",
         "description": "Varlık tespiti için hangi cihazları izleyeceğinizi seçin. {client_count} cihaz bulundu.",
         "data": {
-          "tracked_clients": "İzlenecek cihazlar"
+          "tracked_clients": "İzlenecek cihazlar",
+          "ping_interval": "Cihaz takibi ping aralığı (saniye)"
         }
       }
     },
