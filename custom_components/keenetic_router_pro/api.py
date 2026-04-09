@@ -913,10 +913,19 @@ class KeeneticClient:
         await self._rci_parse(cmd)
 
     async def async_set_wireguard_enabled(self, interface_name: str, enabled: bool) -> None:
-        """Enable or disable a WireGuard interface via RCI parse."""
+        """Enable or disable a WireGuard interface via RCI parse.
+
+        Kept for backwards compatibility; delegates to the generic
+        async_set_interface_enabled which works for any interface type
+        (WireGuard, OpenVPN, SSTP, IPsec, ...).
+        """
+        await self.async_set_interface_enabled(interface_name, enabled)
+
+    async def async_set_interface_enabled(self, interface_name: str, enabled: bool) -> None:
+        """Enable or disable any interface via RCI 'interface X up/down'."""
         cmd = f"interface {interface_name} {'up' if enabled else 'down'}"
         _LOGGER.debug(
-            "Set WireGuard %s enabled=%s via: %s",
+            "Set interface %s enabled=%s via: %s",
             interface_name,
             enabled,
             cmd,
@@ -954,6 +963,7 @@ class KeeneticClient:
             "ipsec",
             "l2tp",
             "pptp",
+            "sstp",
             "zerotier",
             "tor",
         }

@@ -130,6 +130,12 @@ class KeeneticVpnSwitch(BaseKeeneticSwitch):
 
         if self._profile_type == "wireguard":
             prefix = "Wireguard"
+        elif self._profile_type == "sstp":
+            prefix = "SSTP"
+        elif self._profile_type == "openvpn":
+            prefix = "OpenVPN"
+        elif self._profile_type == "ipsec":
+            prefix = "IPsec"
         elif self._profile_type:
             prefix = self._profile_type.capitalize()
         else:
@@ -157,9 +163,9 @@ class KeeneticVpnSwitch(BaseKeeneticSwitch):
         return False
 
     async def async_turn_on(self, **_: Any) -> None:
-        await self._client.async_set_wireguard_enabled(self._iface_id, True)
+        await self._client.async_set_interface_enabled(self._iface_id, True)
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **_: Any) -> None:
-        await self._client.async_set_wireguard_enabled(self._iface_id, False)
+        await self._client.async_set_interface_enabled(self._iface_id, False)
         await self.coordinator.async_request_refresh()

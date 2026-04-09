@@ -24,7 +24,17 @@ from homeassistant.helpers.device_registry import format_mac
 import logging
 
 from .api import KeeneticClient, KeeneticAuthError, KeeneticApiError
-from .const import DOMAIN, DEFAULT_PORT, DEFAULT_SSL, CONF_TRACKED_CLIENTS, CONF_USE_CHALLENGE_AUTH
+from .const import (
+    DOMAIN,
+    DEFAULT_PORT,
+    DEFAULT_SSL,
+    CONF_TRACKED_CLIENTS,
+    CONF_USE_CHALLENGE_AUTH,
+    CONF_PING_INTERVAL,
+    DEFAULT_PING_INTERVAL,
+    MIN_PING_INTERVAL,
+    MAX_PING_INTERVAL,
+)
 
 _LOGGER = logging.getLogger(f"custom_components.{DOMAIN}.config_flow")
 
@@ -285,6 +295,17 @@ class KeeneticOptionsFlow(config_entries.OptionsFlow):
         
         if user_input is not None:
             selected_macs = user_input.get("tracked_clients", [])
+
+            # Validate / clamp ping interval
+            ping_interval_raw = user_input.get(CONF_PING_INTERVAL, DEFAULT_PING_INTERVAL)
+            try:
+                ping_interval = int(ping_interval_raw)
+            except (TypeError, ValueError):
+                ping_interval = DEFAULT_PING_INTERVAL
+            if ping_interval < MIN_PING_INTERVAL:
+                ping_interval = MIN_PING_INTERVAL
+            elif ping_interval > MAX_PING_INTERVAL:
+                ping_interval = MAX_PING_INTERVAL
             
             # Convert selected MAC strings back to dict format
             # First, build a lookup from available clients + previously tracked
@@ -316,7 +337,10 @@ class KeeneticOptionsFlow(config_entries.OptionsFlow):
                 data=new_data,
             )
             _LOGGER.debug("Updated configuration with new tracked clients: %s", tracked_clients)
-            return self.async_create_entry(title="", data={})
+            return self.async_create_entry(
+                title="",
+                data={CONF_PING_INTERVAL: ping_interval},
+            )
         
         # Get current tracked clients
         current_tracked = self._config_entry.data.get(CONF_TRACKED_CLIENTS, [])
@@ -379,12 +403,22 @@ class KeeneticOptionsFlow(config_entries.OptionsFlow):
                 if isinstance(tracked, dict) and tracked.get("mac")
             }
         
+        # Current ping interval (options > data > default)
+        current_ping_interval = self._config_entry.options.get(
+            CONF_PING_INTERVAL,
+            self._config_entry.data.get(CONF_PING_INTERVAL, DEFAULT_PING_INTERVAL),
+        )
+
         # Show form
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
                     vol.Optional("tracked_clients", default=list(current_macs)): cv.multi_select(client_options),
+                    vol.Optional(
+                        CONF_PING_INTERVAL,
+                        default=current_ping_interval,
+                    ): vol.All(vol.Coerce(int), vol.Range(min=MIN_PING_INTERVAL, max=MAX_PING_INTERVAL)),
                 }
             ),
         )

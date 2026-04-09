@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .api import KeeneticClient
-from .const import DOMAIN, FAST_SCAN_INTERVAL, PING_SCAN_INTERVAL
+from .const import DOMAIN, FAST_SCAN_INTERVAL, PING_SCAN_INTERVAL, DEFAULT_PING_INTERVAL
 
 import logging
 
@@ -156,6 +156,7 @@ class KeeneticPingCoordinator(DataUpdateCoordinator[dict[str, bool]]):
         hass: HomeAssistant,
         client: KeeneticClient,
         tracked_clients: list[dict[str, str]],
+        interval: int | None = None,
     ) -> None:
         """Initialize the ping coordinator.
         
@@ -163,12 +164,17 @@ class KeeneticPingCoordinator(DataUpdateCoordinator[dict[str, bool]]):
             hass: Home Assistant instance
             client: Keenetic API client (used for IP updates from router)
             tracked_clients: List of dicts with 'mac', 'ip', 'name' keys
+            interval: Ping refresh interval in seconds. Defaults to
+                DEFAULT_PING_INTERVAL when not provided. Can be reconfigured
+                from the integration's options flow.
         """
+        if interval is None or interval <= 0:
+            interval = DEFAULT_PING_INTERVAL
         super().__init__(
             hass,
             _LOGGER,
             name="keenetic_router_pro_ping",
-            update_interval=timedelta(seconds=PING_SCAN_INTERVAL),
+            update_interval=timedelta(seconds=interval),
         )
         self.client = client
         self._tracked_clients = tracked_clients

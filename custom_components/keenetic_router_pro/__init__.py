@@ -19,6 +19,8 @@ from .const import (
     DATA_PING_COORDINATOR,
     CONF_TRACKED_CLIENTS,
     CONF_USE_CHALLENGE_AUTH,
+    CONF_PING_INTERVAL,
+    DEFAULT_PING_INTERVAL,
     EVENT_NEW_DEVICE,
 )
 from .coordinator import KeeneticCoordinator, KeeneticPingCoordinator
@@ -57,8 +59,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_config_entry_first_refresh()
 
     tracked_clients = data.get(CONF_TRACKED_CLIENTS, [])
-    
-    ping_coordinator = KeeneticPingCoordinator(hass, client, tracked_clients)
+
+    # Ping interval: options flow takes precedence over data, falls back to default.
+    ping_interval = entry.options.get(
+        CONF_PING_INTERVAL,
+        data.get(CONF_PING_INTERVAL, DEFAULT_PING_INTERVAL),
+    )
+    try:
+        ping_interval = int(ping_interval)
+    except (TypeError, ValueError):
+        ping_interval = DEFAULT_PING_INTERVAL
+    if ping_interval < 1:
+        ping_interval = DEFAULT_PING_INTERVAL
+
+    ping_coordinator = KeeneticPingCoordinator(
+        hass, client, tracked_clients, interval=ping_interval
+    )
 
     if tracked_clients:
         # async_config_entry_first_refresh yerine async_refresh kullanıyoruz.
