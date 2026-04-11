@@ -6,11 +6,12 @@ from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.const import EntityCategory
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import DOMAIN, DATA_COORDINATOR
 from .coordinator import KeeneticCoordinator
-from .entity import MeshEntity, ControllerEntity
+from .entity import MeshEntity, ControllerEntity, WanEntity
 
 
 async def async_setup_entry(
@@ -33,8 +34,231 @@ async def async_setup_entry(
             entities.append(KeeneticMeshNodeSensor(coordinator, entry, node_cid))
             entities.append(KeeneticMeshUpdateSensor(coordinator, entry, node_cid))
 
+    # Per-WAN binary sensors: one "Connected" (internet reachability) and
+    # one "Enabled" (UI toggle) per uplink.
+    known_wan_ids: set[str] = set()
+    wan_interfaces = coordinator.data.get("wan_interfaces", []) or []
+    for wan in wan_interfaces:
+        wan_id = wan.get("id")
+        if not wan_id or wan_id in known_wan_ids:
+            continue
+        known_wan_ids.add(wan_id)
+        entities.append(KeeneticWanConnectedSensor(coordinator, entry, wan_id))
+        entities.append(KeeneticWanEnabledSensor(coordinator, entry, wan_id))
+
     if entities:
         async_add_entities(entities)
+
+    # New WAN interfaces may appear later (LTE stick plugged in, a new
+    # PPPoE dialed, an extra WireGuard tunnel configured as uplink).
+    @callback
+    def _async_add_new_wans() -> None:
+        new_entities: list[BinarySensorEntity] = []
+        for wan in coordinator.data.get("wan_interfaces", []) or []:
+            wan_id = wan.get("id")
+            if not wan_id or wan_id in known_wan_ids:
+                continue
+            known_wan_ids.add(wan_id)
+            new_entities.append(
+                KeeneticWanConnectedSensor(coordinator, entry, wan_id)
+            )
+            new_entities.append(
+                KeeneticWanEnabledSensor(coordinator, entry, wan_id)
+            )
+        if new_entities:
+            async_add_entities(new_entities)
+
+    entry.async_on_unload(coordinator.async_add_listener(_async_add_new_wans))
+
+
+class KeeneticWanConnectedSensor(WanEntity, BinarySensorEntity):
+    """Per-WAN "Connected" sensor — true when the uplink is actually usable.
+
+    This is the signal behind the red "NO INTERNET ACCESS (PING CHECK)"
+    badge in the Keenetic web UI and the condition that drives failover
+    to a backup WAN. "Usable" here means: link up, global role, has a
+    routable public IP, and the router isn't reporting a session
+    failure. See api._derive_internet_access for the full logic.
+    """
+
+    _attr_has_entity_name = True
+    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+
+    def __init__(
+        self,
+        coordinator: KeeneticCoordinator,
+        entry: ConfigEntry,
+        wan_id: str,
+    ) -> None:
+        WanEntity.__init__(self, coordinator, entry.entry_id, entry.title, wan_id)
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._entry_id}_wan_{self._wan_id}_connected"
+
+    @property
+    def name(self) -> str:
+        return "Connected"
+
+    @property
+    def available(self) -> bool:
+        if not super().available:
+            return False
+        wan = self._wan
+        if wan is None:
+            return False
+        # None means "pending / unknown" — surface as unavailable rather
+        # than silently flipping to False and triggering bogus outage
+        # automations.
+        return wan.get("internet_access") is not None
+
+    @property
+    def is_on(self) -> bool:
+        wan = self._wan
+        if wan is None:
+            return False
+        return bool(wan.get("internet_access"))
+
+    @property
+    def icon(self) -> str:
+        wan = self._wan
+        if wan and wan.get("internet_access"):
+            return "mdi:web-check"
+        if wan and wan.get("link_state") == "up":
+            return "mdi:web-remove"
+        return "mdi:web-off"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        wan = self._wan
+        if not wan:
+            return None
+        attrs: dict[str, Any] = {
+            "interface": wan.get("id"),
+            "description": wan.get("description"),
+            "type": wan.get("type"),
+            "link_state": wan.get("link_state"),
+            "defaultgw": wan.get("defaultgw"),
+            "priority": wan.get("priority"),
+            "role_label": wan.get("role_label"),
+            "public_ip": wan.get("ip"),
+            "underlying": wan.get("underlying"),
+            # Where the current reachability value came from — either
+            # the router's own ping-check or our link+IP heuristic.
+            "source": wan.get("internet_access_source"),
+        }
+
+        # Expose authoritative ping-check details when the router is
+        # actually running a profile bound to this WAN. These are the
+        # attributes the feature request asked for:
+        #   - check target(s)
+        #   - failure reason / counters
+        #   - last check time
+        pc = wan.get("ping_check")
+        if pc:
+            targets = []
+            hosts = pc.get("check_hosts") or []
+            if hosts:
+                targets.extend(hosts)
+            addrs = pc.get("check_addresses") or []
+            if addrs:
+                targets.extend(addrs)
+            if targets:
+                attrs["check_targets"] = targets
+            if pc.get("check_port") is not None:
+                attrs["check_port"] = pc.get("check_port")
+            if pc.get("check_mode"):
+                attrs["check_mode"] = pc.get("check_mode")
+            if pc.get("profile"):
+                attrs["check_profile"] = pc.get("profile")
+            if pc.get("success_count") is not None:
+                attrs["success_count"] = pc.get("success_count")
+            if pc.get("fail_count") is not None:
+                attrs["fail_count"] = pc.get("fail_count")
+            if pc.get("max_fails") is not None:
+                attrs["max_fails"] = pc.get("max_fails")
+            if pc.get("update_interval") is not None:
+                attrs["update_interval"] = pc.get("update_interval")
+            if pc.get("status"):
+                attrs["ping_check_status"] = pc.get("status")
+            # Human-readable failure reason: Keenetic doesn't expose a
+            # free-form reason string, so we synthesise one from the
+            # counters when the check is failing.
+            if pc.get("passing") is False:
+                fc = pc.get("fail_count") or 0
+                mf = pc.get("max_fails")
+                if mf:
+                    attrs["failure_reason"] = (
+                        f"ping check failing ({fc}/{mf} consecutive failures"
+                        f" to {', '.join(targets) if targets else 'check targets'})"
+                    )
+                else:
+                    attrs["failure_reason"] = (
+                        f"ping check failing to "
+                        f"{', '.join(targets) if targets else 'check targets'}"
+                    )
+            ignored = pc.get("all_profiles")
+            if ignored and len(ignored) > 1:
+                # Surface all observed profiles for debugging when more
+                # than one is touching this interface.
+                attrs["all_ping_check_profiles"] = ignored
+
+        layers = wan.get("summary_layers") or {}
+        if layers:
+            attrs["summary_layers"] = layers
+        last_update = getattr(self.coordinator, "last_update_success_time", None)
+        if last_update is not None:
+            attrs["last_check"] = last_update.isoformat()
+        return attrs
+
+
+class KeeneticWanEnabledSensor(WanEntity, BinarySensorEntity):
+    """Per-WAN "Enabled" sensor — matches the UI toggle state.
+
+    True when summary.layer.conf is "running" (interface is configured
+    up), False when it's "disabled" (the user has toggled the uplink
+    off in the web UI).
+    """
+
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:toggle-switch-variant"
+
+    def __init__(
+        self,
+        coordinator: KeeneticCoordinator,
+        entry: ConfigEntry,
+        wan_id: str,
+    ) -> None:
+        WanEntity.__init__(self, coordinator, entry.entry_id, entry.title, wan_id)
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._entry_id}_wan_{self._wan_id}_enabled"
+
+    @property
+    def name(self) -> str:
+        return "Enabled"
+
+    @property
+    def is_on(self) -> bool:
+        wan = self._wan
+        if wan is None:
+            return False
+        return bool(wan.get("enabled"))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        wan = self._wan
+        if not wan:
+            return None
+        layers = wan.get("summary_layers") or {}
+        return {
+            "conf": layers.get("conf"),
+            "link": layers.get("link"),
+            "ipv4": layers.get("ipv4"),
+            "ctrl": layers.get("ctrl"),
+        }
 
 
 class KeeneticMeshNodeSensor(MeshEntity, BinarySensorEntity):

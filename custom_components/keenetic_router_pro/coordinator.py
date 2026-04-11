@@ -76,6 +76,131 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         
         # Yeni veriler
         wan_status = await self.client.async_get_wan_status(interfaces=interfaces)
+        try:
+            wan_interfaces = await self.client.async_get_wan_interfaces(
+                interfaces=interfaces
+            )
+        except Exception as err:
+            _LOGGER.debug("async_get_wan_interfaces failed: %s", err)
+            wan_interfaces = []
+
+        # Authoritative ping-check results per WAN (rci/show/ping-check).
+        # This is the same data source that drives the red
+        # "NO INTERNET ACCESS (PING CHECK)" badge in the web UI and the
+        # router's own failover decision.
+        try:
+            ping_check_status = await self.client.async_get_ping_check_status()
+        except Exception as err:
+            _LOGGER.debug("async_get_ping_check_status failed: %s", err)
+            ping_check_status = {}
+
+        # --- Enrich each WAN with role label, byte counters and throughput
+        #
+        # We reuse the already-fetched `interface_stats` (show/interface/stat
+        # for every interface) instead of firing extra RCI calls. Throughput
+        # is computed as a delta against the previous coordinator tick.
+        prev_wan_by_id: dict[str, dict[str, Any]] = {}
+        if self.data:
+            for prev in self.data.get("wan_interfaces", []) or []:
+                pid = prev.get("id")
+                if pid:
+                    prev_wan_by_id[pid] = prev
+        now_ts = asyncio.get_event_loop().time()
+
+        def _to_int(v: Any) -> int:
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return 0
+
+        for wan in wan_interfaces:
+            wan_id = wan.get("id")
+            stats = (interface_stats or {}).get(wan_id) or {}
+            rx_bytes = _to_int(
+                stats.get("rxbytes")
+                or stats.get("rx-bytes")
+                or stats.get("rx_bytes")
+            )
+            tx_bytes = _to_int(
+                stats.get("txbytes")
+                or stats.get("tx-bytes")
+                or stats.get("tx_bytes")
+            )
+            wan["rx_bytes"] = rx_bytes
+            wan["tx_bytes"] = tx_bytes
+            wan["rx_packets"] = _to_int(stats.get("rxpackets") or stats.get("rx-packets"))
+            wan["tx_packets"] = _to_int(stats.get("txpackets") or stats.get("tx-packets"))
+            wan["_sample_ts"] = now_ts
+
+            # --- Authoritative ping-check override ---
+            # When the router itself reports a ping-check result for
+            # this WAN, trust it over the heuristic. Three cases:
+            #   passing=True  → internet_access=True (ping check ok)
+            #   passing=False → internet_access=False (real outage,
+            #                   the case the feature request is about)
+            #   passing=None  → no real profile attached / mixed state
+            #                   → keep the heuristic value from api.py
+            pc = ping_check_status.get(wan_id)
+            if pc is not None:
+                wan["ping_check"] = pc
+                passing = pc.get("passing")
+                if passing is True or passing is False:
+                    wan["internet_access"] = passing
+                    wan["internet_access_source"] = "ping_check"
+                else:
+                    wan["internet_access_source"] = "heuristic"
+            else:
+                wan["ping_check"] = None
+                wan["internet_access_source"] = "heuristic"
+
+            prev = prev_wan_by_id.get(wan_id)
+            if prev and prev.get("_sample_ts"):
+                dt = now_ts - float(prev.get("_sample_ts") or 0)
+                if dt > 0:
+                    d_rx = rx_bytes - _to_int(prev.get("rx_bytes"))
+                    d_tx = tx_bytes - _to_int(prev.get("tx_bytes"))
+                    # Counter wraps / resets (interface bounced): treat as 0.
+                    wan["rx_throughput"] = max(0.0, d_rx / dt) if d_rx >= 0 else 0.0
+                    wan["tx_throughput"] = max(0.0, d_tx / dt) if d_tx >= 0 else 0.0
+                else:
+                    wan["rx_throughput"] = 0.0
+                    wan["tx_throughput"] = 0.0
+            else:
+                wan["rx_throughput"] = 0.0
+                wan["tx_throughput"] = 0.0
+
+        # Role labels: the interface with `defaultgw: true` is the
+        # Default connection. The rest are Backup connection 1..N ordered
+        # by priority descending (higher Keenetic priority = next in line).
+        default_idx: int | None = None
+        for i, wan in enumerate(wan_interfaces):
+            if wan.get("defaultgw"):
+                default_idx = i
+                break
+        # Stable order: default first, then backups by priority desc
+        def _prio_key(w: dict[str, Any]) -> int:
+            p = w.get("priority")
+            return -int(p) if isinstance(p, (int, float)) else 0
+
+        if default_idx is not None:
+            default = wan_interfaces[default_idx]
+            backups = [
+                w for i, w in enumerate(wan_interfaces) if i != default_idx
+            ]
+            backups.sort(key=_prio_key)
+            ordered = [default] + backups
+        else:
+            ordered = sorted(wan_interfaces, key=_prio_key)
+
+        for position, wan in enumerate(ordered):
+            if position == 0 and (wan.get("defaultgw") or default_idx is None):
+                wan["role_label"] = "Default connection"
+                wan["role_index"] = 0
+            else:
+                idx = position if default_idx is None else position
+                wan["role_label"] = f"Backup connection {idx}"
+                wan["role_index"] = idx
+        wan_interfaces = ordered
         mesh_nodes = await self.client.async_get_mesh_nodes()
         traffic_stats = await self.client.async_get_traffic_stats(interfaces=interfaces)
         client_stats = await self.client.async_get_client_stats()
@@ -127,6 +252,7 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "vpn_tunnels": vpn_tunnels,
             "clients": clients,
             "wan_status": wan_status,
+            "wan_interfaces": wan_interfaces,
             "mesh_nodes": mesh_nodes,
             "interface_stats": interface_stats,
             "client_stats": client_stats,

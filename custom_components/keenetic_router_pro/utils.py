@@ -86,6 +86,37 @@ def get_mesh_usb_device_info(
     # Fallback к главному устройству
     return get_main_device_info(title, entry_id, None, None, node_ip, ssl)
 
+def get_wan_device_info(
+    title: str,
+    entry_id: str,
+    wan_id: str,
+    description: Optional[str] = None,
+    iface_type: Optional[str] = None,
+    role_label: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Device info for a single WAN interface.
+
+    Each WAN appears in HA as its own sub-device under the main router,
+    so the user can see one card per uplink with all its sensors grouped.
+    """
+    name_parts = []
+    if description and description != wan_id:
+        name_parts.append(description)
+    else:
+        name_parts.append(wan_id)
+    if role_label:
+        name_parts.append(f"({role_label})")
+    device_name = " ".join(name_parts)
+
+    return {
+        "identifiers": {(DOMAIN, f"{entry_id}_wan_{wan_id}")},
+        "name": f"{title} — {device_name}",
+        "manufacturer": "Keenetic",
+        "model": f"WAN ({iface_type})" if iface_type else "WAN",
+        "via_device": (DOMAIN, entry_id),
+    }
+
+
 def get_client_device_info(
     entry_id: str,
     mac: str,
