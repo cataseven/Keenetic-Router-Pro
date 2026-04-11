@@ -277,6 +277,33 @@ class KeeneticPingCoordinator(DataUpdateCoordinator[dict[str, bool]]):
     PING_TIMEOUT = 1        # Her ping için timeout (saniye)
     PING_PRIVILEGED = False # Unprivileged mode (root gerektirmez)
 
+    @staticmethod
+    def _is_valid_ip(ip: Any) -> bool:
+        """Is this a usable IPv4 address for presence pinging?
+
+        A client that has left the network often shows up in the router
+        API with an IP of "0.0.0.0", an empty string, or None. Pinging
+        any of these is meaningless at best and produces *false positive*
+        "alive" results at worst (0.0.0.0 can resolve to the local host
+        on some Linux kernels, which icmplib then reports as reachable —
+        flipping the device tracker back to "home" even though the phone
+        is actually miles away). Centralising the check in one place
+        prevents stale addresses from leaking into the ping loop.
+        """
+        if ip is None:
+            return False
+        s = str(ip).strip()
+        if not s:
+            return False
+        if s in ("0.0.0.0", "::", "::0", "0:0:0:0:0:0:0:0"):
+            return False
+        # Reject obviously malformed values without pulling in ipaddress
+        # on the hot path — we only need to catch the common router
+        # placeholders.
+        if s.startswith("0."):
+            return False
+        return True
+
     def __init__(
         self,
         hass: HomeAssistant,
@@ -316,7 +343,7 @@ class KeeneticPingCoordinator(DataUpdateCoordinator[dict[str, bool]]):
             else:
                 mac = str(c).lower()
                 ip = ""
-            if mac and ip:
+            if mac and self._is_valid_ip(ip):
                 self._mac_to_ip[mac] = ip
 
     def update_tracked_clients(self, tracked_clients: list[dict[str, str]]) -> None:
@@ -330,14 +357,30 @@ class KeeneticPingCoordinator(DataUpdateCoordinator[dict[str, bool]]):
             else:
                 mac = str(c).lower()
                 ip = ""
-            if mac and ip:
+            if mac and self._is_valid_ip(ip):
                 self._mac_to_ip[mac] = ip
 
     def update_client_ip(self, mac: str, ip: str) -> None:
-        """Update IP address for a specific client (dynamic IP support)."""
+        """Update IP address for a specific client (dynamic IP support).
+
+        Invalid/placeholder addresses like "0.0.0.0" or empty strings
+        are rejected *and* remove any previously-cached IP for this
+        MAC. Rationale: when a client leaves the network the router
+        first reports the stale last-known IP for ~30s and then resets
+        it to 0.0.0.0. Without this cleanup, the ping loop would either
+        keep pinging the stale address (false negative) or ping
+        0.0.0.0 which some kernels happily answer (false positive —
+        the device tracker flips back to "home" from kilometres away).
+        Dropping the MAC from the ping map causes `_async_update_data`
+        to report False for this client until a new valid lease shows
+        up, which matches the user's expectation.
+        """
         mac_lower = mac.lower()
-        if ip:
-            self._mac_to_ip[mac_lower] = ip
+        if self._is_valid_ip(ip):
+            self._mac_to_ip[mac_lower] = str(ip).strip()
+        else:
+            # Remove stale entry so the ping loop stops reporting on it.
+            self._mac_to_ip.pop(mac_lower, None)
 
     def get_tracked_macs(self) -> set[str]:
         """Return set of tracked MAC addresses."""
@@ -368,6 +411,16 @@ class KeeneticPingCoordinator(DataUpdateCoordinator[dict[str, bool]]):
         
         Returns True if host is alive, False otherwise.
         """
+        # Belt-and-braces: even if a caller somehow slips a placeholder
+        # address past the map-level validation, refuse to actually
+        # send ICMP to it. icmplib will happily "ping" 0.0.0.0 on some
+        # kernels and report the host as alive, which is exactly the
+        # false-positive that made device_tracker flip back to "home"
+        # after the router cleared the client's lease.
+        if not self._is_valid_ip(ip):
+            _LOGGER.debug("Refusing to ping invalid address %r", ip)
+            return False
+
         if not ICMPLIB_AVAILABLE:
             _LOGGER.warning("icmplib not available, cannot ping %s", ip)
             return False
@@ -426,34 +479,45 @@ class KeeneticPingCoordinator(DataUpdateCoordinator[dict[str, bool]]):
         Returns:
             Dict mapping MAC addresses to their connected status (True/False)
         """
+        # Every tracked MAC must appear in the result, even if we have
+        # no valid IP for it right now — otherwise the device_tracker
+        # entity keeps showing its last (stale) state forever. MACs
+        # without a usable address are explicitly reported as False so
+        # the tracker correctly flips to "not_home".
+        tracked_macs = self.get_tracked_macs()
+        mac_status: dict[str, bool] = {mac: False for mac in tracked_macs}
+
         if not self._mac_to_ip:
             _LOGGER.debug("No IP addresses to ping")
-            return {}
+            return mac_status
 
         if not ICMPLIB_AVAILABLE:
             _LOGGER.error("icmplib not installed, ping tracking disabled")
-            return {mac: False for mac in self._mac_to_ip}
+            return mac_status
 
         # Tüm ping'leri paralel olarak çalıştır
         tasks = []
         macs = []
-        
+
         for mac, ip in self._mac_to_ip.items():
+            if not self._is_valid_ip(ip):
+                # Paranoid: validation happens on write, but double-check
+                # on read in case something mutated the map out-of-band.
+                continue
             tasks.append(self._async_ping_host(ip))
             macs.append(mac)
-        
+
         # Tüm ping'leri bekle
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         # Sonuçları MAC adresine göre eşle
-        mac_status: dict[str, bool] = {}
         for mac, result in zip(macs, results):
             if isinstance(result, BaseException):
                 _LOGGER.debug("Ping exception for %s: %s", mac, result)
                 mac_status[mac] = False
             else:
                 mac_status[mac] = bool(result)
-        
+
         _LOGGER.debug("ICMP Ping results: %s", mac_status)
-        
+
         return mac_status
