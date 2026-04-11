@@ -421,4 +421,7 @@ class KeeneticOptionsFlow(config_entries.OptionsFlow):
                     ): vol.All(vol.Coerce(int), vol.Range(min=MIN_PING_INTERVAL, max=MAX_PING_INTERVAL)),
                 }
             ),
+            description_placeholders={
+                "client_count": str(len(client_options)),
+            },
         )

@@ -104,11 +104,26 @@ class KeeneticClientTracker(ClientEntity, ScannerEntity):
     @callback
     def _handle_coordinator_update(self) -> None:
         client = self._client_from_main
-        if client:
-            ip = client.get("ip")
-            if ip:
-                self._ping_coordinator.update_client_ip(self._mac, str(ip))
-        
+        # Always push the current IP (or empty string) to the ping
+        # coordinator. Two cases we must handle correctly:
+        #
+        #   1. client exists, ip is "0.0.0.0" or "" — router has
+        #      cleared the lease. Forwarding the placeholder causes
+        #      update_client_ip to DROP the stale entry from the
+        #      ping map (because _is_valid_ip rejects it).
+        #
+        #   2. client row has disappeared entirely from the router
+        #      response — the hotspot table no longer lists this MAC.
+        #      Same cleanup path: pass an empty string and the stale
+        #      IP is purged.
+        #
+        # Without both of these, the old address lingers in the ping
+        # loop forever and the device tracker flips back to "home"
+        # when some kernels answer ICMP to 0.0.0.0 or when the stale
+        # IP happens to be owned by a different device now.
+        ip = client.get("ip") if client else ""
+        self._ping_coordinator.update_client_ip(self._mac, str(ip or ""))
+
         self.async_write_ha_state()
 
     @callback

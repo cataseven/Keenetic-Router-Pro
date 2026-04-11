@@ -1125,6 +1125,417 @@ class KeeneticClient:
 
         return {"status": "down", "ip": None, "link": "down"}
 
+    async def async_get_wan_interfaces(
+        self, interfaces: Dict[str, Any] | None = None
+    ) -> List[Dict[str, Any]]:
+        """Return per-uplink info for every configured WAN interface.
+
+        Enumerates *all* uplink-capable interfaces Keenetic knows about —
+        not just the currently active one — so Home Assistant can expose
+        a full picture of the multi-WAN / failover configuration.
+
+        WAN detection logic (derived from real show/interface output):
+          - `global: true` — interface has a routable, "public-facing" role
+          - `priority` is set — interface participates in Keenetic's
+            uplink priority ordering (this is what puts an interface into
+            the "Connection priorities" list in the web UI)
+          - `role` contains "inet" — explicit uplink tag
+          Any interface matching (`global=true` AND `priority` is set),
+          OR with `role` containing "inet", is treated as a WAN.
+
+          Interfaces that are merely carriers for a PPPoE/VLAN (e.g. the
+          raw GigabitEthernet1 below PPPoE0) are *not* WANs — they have
+          `global: false` and no `priority`, so they fail the filter
+          naturally. They show up as `via` / `underlying` on the WAN that
+          rides on top of them.
+
+        Each entry in the returned list contains:
+            id                 interface id (PPPoE0, Wireguard0, ...)
+            description        human-readable description from the router
+                               UI ("Telekom", "Zurich"), falls back to id
+            interface_name     the "interface-name" field (e.g. "ISP")
+            type               interface type (PPPoE / Wireguard / ...)
+            link_state         "up" / "down"
+            enabled            bool — True when the interface is configured
+                               up (summary.layer.conf != "disabled")
+            global             bool — has a global (public) role
+            defaultgw          bool — currently the default gateway
+            priority           int — Keenetic uplink priority (higher wins)
+            role               list[str] — e.g. ["inet"]
+            security_level     "public" / "private" / "protected"
+            ip                 current public IP, if any
+            mask               subnet mask, if any
+            uptime             seconds since the session came up
+            underlying         id of the physical/logical interface this
+                               session rides on (PPPoE `via`), if any
+            remote             remote peer address (PPPoE/tunnel)
+            mac                L2 address if applicable
+            internet_access    bool — best-effort ping-check / reachability
+                               heuristic (see _derive_internet_access)
+            summary_layers     nested summary.layer dict (conf/link/ipv4/...)
+            raw                the untouched interface dict, for consumers
+                               that want a field we didn't pull out
+        """
+        if interfaces is None:
+            interfaces = await self.async_get_interfaces()
+        iface_list = self._normalize_interfaces(interfaces)
+
+        def _is_wan(iface: Dict[str, Any]) -> bool:
+            # Explicit uplink role is the strongest signal.
+            role = iface.get("role")
+            if isinstance(role, list) and any(
+                str(r).lower() in ("inet", "internet", "wan") for r in role
+            ):
+                return True
+            if isinstance(role, str) and role.lower() in ("inet", "internet", "wan"):
+                return True
+
+            # Otherwise: global + priority is how Keenetic marks an
+            # interface as a ranked uplink. Both conditions must hold —
+            # `global: true` alone catches LAN bridges in some configs,
+            # and `priority` alone catches non-uplink routing tweaks.
+            is_global = bool(iface.get("global"))
+            has_priority = iface.get("priority") is not None
+            return is_global and has_priority
+
+        def _extract_ip(iface: Dict[str, Any]) -> str | None:
+            # PPPoE/static: flat "address" string. Ethernet WANs in some
+            # firmware versions use global-address/address lists.
+            addr = iface.get("address")
+            if isinstance(addr, str) and addr:
+                return addr.split("/")[0]
+            gaddr = iface.get("global-address")
+            if isinstance(gaddr, list) and gaddr:
+                first = gaddr[0]
+                if isinstance(first, dict):
+                    v = first.get("address") or first.get("ip")
+                    if v:
+                        return str(v).split("/")[0]
+                elif isinstance(first, str):
+                    return first.split("/")[0]
+            if isinstance(addr, list) and addr:
+                first = addr[0]
+                if isinstance(first, dict):
+                    v = first.get("address") or first.get("ip")
+                    if v:
+                        return str(v).split("/")[0]
+                elif isinstance(first, str):
+                    return first.split("/")[0]
+            return None
+
+        def _derive_enabled(iface: Dict[str, Any]) -> bool:
+            # summary.layer.conf == "disabled" means the interface is
+            # toggled off in the config — matches the UI toggle exactly.
+            summary = iface.get("summary") or {}
+            layer = summary.get("layer") or {}
+            conf = str(layer.get("conf") or "").lower()
+            if conf == "disabled":
+                return False
+            if conf == "running":
+                return True
+            # Fallback: if we don't have a summary, assume enabled unless
+            # state says otherwise.
+            return True
+
+        def _derive_internet_access(iface: Dict[str, Any]) -> bool | None:
+            """Best-effort ping-check / reachability indicator.
+
+            Keenetic's raw show/interface output on this firmware does
+            *not* expose the ping-check result as a distinct field — the
+            red "NO INTERNET ACCESS (PING CHECK)" badge in the web UI is
+            computed client-side from a different RCI call that's not
+            uniformly available across firmware versions.
+
+            As a pragmatic substitute we use:
+                up  = state=="up" AND global AND has routable IP
+                     AND summary.layer.ipv4 in {"running"}
+                down = state != "up" OR global is false OR no IP
+                unknown (None) = state up but no public IP yet (pending)
+
+            This matches the user-visible "this WAN is actually usable"
+            meaning for the common case (PPPoE up with IP, WG tunnel up
+            with handshake) without false-positiving on carrier
+            interfaces or half-initialised uplinks.
+            """
+            state = str(iface.get("state") or "").lower()
+            if state != "up":
+                return False
+            if not iface.get("global"):
+                return False
+            ip = _extract_ip(iface)
+            if not ip:
+                summary = iface.get("summary") or {}
+                layer = summary.get("layer") or {}
+                if str(layer.get("ipv4") or "").lower() == "pending":
+                    return None
+                return False
+            # Extra guard: PPPoE exposes `fail` when the last session
+            # attempt failed.
+            fail = str(iface.get("fail") or "").lower()
+            if fail in ("yes", "true"):
+                return False
+            return True
+
+        wans: List[Dict[str, Any]] = []
+        for iface in iface_list:
+            if not _is_wan(iface):
+                continue
+            iface_id = iface.get("id") or iface.get("interface-name")
+            if not iface_id:
+                continue
+
+            role = iface.get("role")
+            if isinstance(role, str):
+                role_list = [role]
+            elif isinstance(role, list):
+                role_list = [str(r) for r in role]
+            else:
+                role_list = []
+
+            wans.append({
+                "id": iface_id,
+                "description": iface.get("description") or iface.get("interface-name") or iface_id,
+                "interface_name": iface.get("interface-name"),
+                "type": iface.get("type"),
+                "link_state": str(iface.get("state") or "down").lower(),
+                "enabled": _derive_enabled(iface),
+                "global": bool(iface.get("global")),
+                "defaultgw": bool(iface.get("defaultgw")),
+                "priority": iface.get("priority"),
+                "role": role_list,
+                "security_level": iface.get("security-level"),
+                "ip": _extract_ip(iface),
+                "mask": iface.get("mask"),
+                "uptime": iface.get("uptime"),
+                "underlying": iface.get("via"),
+                "remote": iface.get("remote"),
+                "mac": iface.get("mac"),
+                "internet_access": _derive_internet_access(iface),
+                "summary_layers": (iface.get("summary") or {}).get("layer") or {},
+                "raw": iface,
+            })
+
+        return wans
+
+    async def async_get_ping_check_status(self) -> Dict[str, Any]:
+        """Return the router's ping-check results per interface.
+
+        This is the authoritative "is the internet actually reachable
+        through this WAN" signal — the same data that drives the red
+        "NO INTERNET ACCESS (PING CHECK)" badge in the Keenetic web UI
+        and that the router itself uses to decide when to fail over to
+        a backup uplink.
+
+        Endpoint: rci/show/ping-check
+        Example response:
+            {
+              "pingcheck": [
+                {
+                  "profile": "default",
+                  "host": ["captive.keenetic.net"],
+                  "port": 80,
+                  "update-interval": 30,
+                  "max-fails": 3,
+                  "mode": "icmp",
+                  "interface": {
+                    "PPPoE0": {
+                      "successcount": 7,
+                      "failcount": 0,
+                      "status": "pass",
+                      "ipcache": [
+                        {"host": "captive.keenetic.net",
+                         "addresses": ["135.181.129.158", "..."]}
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+
+        Returns a flat dict keyed by interface id:
+            {
+              "PPPoE0": {
+                "status": "pass",                 # "pass" | "fail"
+                "success_count": 7,
+                "fail_count": 0,
+                "profile": "default",             # winning profile name
+                "check_hosts": ["captive.keenetic.net"],
+                "check_addresses": ["135.181.129.158", ...],
+                "check_port": 80,
+                "check_mode": "icmp",
+                "update_interval": 30,
+                "max_fails": 3,
+                "all_profiles": [                 # every profile touching
+                  {"profile": "...", "status": "...", ...}   # this iface
+                ],
+              }
+            }
+
+        A router may have multiple profiles bound to the same interface.
+        Profiles whose name starts with "_" (e.g. `_WEBADMIN_PPPoE0`)
+        are transient artefacts that the web UI creates for one-off
+        connection tests. They often target TEST-NET addresses and
+        stay stale in the config. We ignore them when at least one
+        "real" profile is present; if only underscore-profiles exist,
+        we fall back to them rather than returning nothing.
+
+        When multiple real profiles report on the same interface, the
+        aggregate status is "fail" if any profile is failing (matches
+        how Keenetic itself treats the WAN as unusable for routing).
+        """
+        data = await self._rci_get("show/ping-check") or {}
+        raw_profiles = data.get("pingcheck") or []
+        if not isinstance(raw_profiles, list):
+            return {}
+
+        # Collect per-interface observations from every profile that
+        # actually has results (profile without `interface` block is
+        # just a definition with nothing attached yet).
+        observations: Dict[str, List[Dict[str, Any]]] = {}
+        for profile_entry in raw_profiles:
+            if not isinstance(profile_entry, dict):
+                continue
+            iface_map = profile_entry.get("interface")
+            if not isinstance(iface_map, dict) or not iface_map:
+                continue
+
+            profile_name = str(profile_entry.get("profile") or "")
+            host = profile_entry.get("host")
+            if isinstance(host, str):
+                hosts = [host]
+            elif isinstance(host, list):
+                hosts = [str(h) for h in host if h]
+            else:
+                hosts = []
+
+            for iface_id, iface_result in iface_map.items():
+                if not isinstance(iface_result, dict):
+                    continue
+                ipcache = iface_result.get("ipcache") or []
+                addresses: List[str] = []
+                cache_hosts: List[str] = []
+                if isinstance(ipcache, list):
+                    for entry in ipcache:
+                        if not isinstance(entry, dict):
+                            continue
+                        h = entry.get("host")
+                        if h:
+                            cache_hosts.append(str(h))
+                        addrs = entry.get("addresses") or []
+                        if isinstance(addrs, list):
+                            addresses.extend(str(a) for a in addrs if a)
+
+                # Prefer ipcache hosts over profile-level host list when
+                # both exist (ipcache reflects what the router actually
+                # resolved and probed).
+                effective_hosts = cache_hosts or hosts
+
+                observation = {
+                    "profile": profile_name,
+                    "status": str(iface_result.get("status") or "").lower() or None,
+                    "success_count": iface_result.get("successcount"),
+                    "fail_count": iface_result.get("failcount"),
+                    "check_hosts": effective_hosts,
+                    "check_addresses": addresses,
+                    "check_port": profile_entry.get("port"),
+                    "check_mode": profile_entry.get("mode"),
+                    "update_interval": profile_entry.get("update-interval"),
+                    "max_fails": profile_entry.get("max-fails"),
+                }
+                observations.setdefault(iface_id, []).append(observation)
+
+        # Per interface, pick "authoritative" profiles and aggregate.
+        result: Dict[str, Any] = {}
+        for iface_id, obs_list in observations.items():
+            # Drop web-admin transient profiles. These are artefacts the
+            # web UI creates for one-off connection tests (names start
+            # with "_", typically target TEST-NET like 192.0.2.1) and
+            # stay stale in the config long after the test. They MUST
+            # NOT be treated as authoritative — doing so would cause
+            # false-positive outage alarms on a WAN that's actually
+            # fine. When no real profile is attached to an interface,
+            # we return status=None so downstream falls back to the
+            # link+IP heuristic instead of trusting a stale webadmin
+            # result.
+            real = [o for o in obs_list if not str(o.get("profile") or "").startswith("_")]
+
+            if not real:
+                # Only transient/webadmin profiles exist — don't trust them.
+                result[iface_id] = {
+                    "status": None,
+                    "passing": None,
+                    "profile": None,
+                    "success_count": None,
+                    "fail_count": None,
+                    "check_hosts": [],
+                    "check_addresses": [],
+                    "check_port": None,
+                    "check_mode": None,
+                    "update_interval": None,
+                    "max_fails": None,
+                    "all_profiles": obs_list,
+                    "ignored_profiles": [o.get("profile") for o in obs_list],
+                }
+                continue
+
+            effective = real
+
+            # Aggregate status: any "fail" wins, all "pass" -> "pass",
+            # otherwise whatever the last-seen status is (typically a
+            # profile in "pending"/"checking" state that's newly added).
+            statuses = [o.get("status") for o in effective if o.get("status")]
+            if not statuses:
+                agg_status: str | None = None
+                agg_bool: bool | None = None
+            elif any(s == "fail" for s in statuses):
+                agg_status = "fail"
+                agg_bool = False
+            elif all(s == "pass" for s in statuses):
+                agg_status = "pass"
+                agg_bool = True
+            else:
+                # Mixed or unknown state — surface as None so the
+                # sensor goes "unavailable" rather than lying.
+                agg_status = statuses[-1]
+                agg_bool = None
+
+            # The "winning" profile is the first fail (if any), else the
+            # first pass — gives the most useful single-profile summary
+            # for attribute display.
+            primary: Dict[str, Any] | None = None
+            for o in effective:
+                if o.get("status") == "fail":
+                    primary = o
+                    break
+            if primary is None:
+                for o in effective:
+                    if o.get("status") == "pass":
+                        primary = o
+                        break
+            if primary is None and effective:
+                primary = effective[0]
+
+            flat: Dict[str, Any] = {
+                "status": agg_status,
+                "passing": agg_bool,
+                "profile": (primary or {}).get("profile"),
+                "success_count": (primary or {}).get("success_count"),
+                "fail_count": (primary or {}).get("fail_count"),
+                "check_hosts": (primary or {}).get("check_hosts") or [],
+                "check_addresses": (primary or {}).get("check_addresses") or [],
+                "check_port": (primary or {}).get("check_port"),
+                "check_mode": (primary or {}).get("check_mode"),
+                "update_interval": (primary or {}).get("update_interval"),
+                "max_fails": (primary or {}).get("max_fails"),
+                "all_profiles": obs_list,
+                "ignored_profiles": [
+                    o.get("profile") for o in obs_list if o not in effective
+                ],
+            }
+            result[iface_id] = flat
+
+        return result
+
 
     async def async_get_mesh_nodes(self) -> List[Dict[str, Any]]:
         """Get mesh/extender nodes status from mws/member endpoint.

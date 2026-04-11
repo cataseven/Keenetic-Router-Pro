@@ -4,7 +4,12 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.device_registry import DeviceInfo
 from .const import DOMAIN
 from .coordinator import KeeneticCoordinator, KeeneticPingCoordinator
-from .utils import get_main_device_info, get_mesh_device_info, get_client_device_info
+from .utils import (
+    get_main_device_info,
+    get_mesh_device_info,
+    get_client_device_info,
+    get_wan_device_info,
+)
 
 
 class ControllerEntity(CoordinatorEntity):
@@ -125,6 +130,46 @@ class MeshEntity(CoordinatorEntity):
             fqdn=node.get("fqdn")
         )
     
+class WanEntity(CoordinatorEntity):
+    """Base class for per-WAN-interface entities.
+
+    Each WAN is exposed in HA as its own sub-device under the main
+    router, so all of its sensors (status, IP, uptime, throughput, ...)
+    are grouped together in the UI.
+    """
+
+    def __init__(
+        self,
+        coordinator: KeeneticCoordinator,
+        entry_id: str,
+        title: str,
+        wan_id: str,
+    ) -> None:
+        super().__init__(coordinator)
+        self._entry_id = entry_id
+        self._title = title
+        self._wan_id = wan_id
+
+    @property
+    def _wan(self) -> Optional[Dict[str, Any]]:
+        for w in self.coordinator.data.get("wan_interfaces", []) or []:
+            if w.get("id") == self._wan_id:
+                return w
+        return None
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        wan = self._wan or {}
+        return get_wan_device_info(
+            title=self._title,
+            entry_id=self._entry_id,
+            wan_id=self._wan_id,
+            description=wan.get("description"),
+            iface_type=wan.get("type"),
+            role_label=wan.get("role_label"),
+        )
+
+
 class ClientEntity(CoordinatorEntity):
     """Базовый класс для сущностей отслеживаемых клиентов как отдельных устройств."""
     

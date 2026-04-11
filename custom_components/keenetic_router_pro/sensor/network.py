@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntity, SensorStateClass
+from homeassistant.components.sensor import (
+    SensorEntity,
+    SensorStateClass,
+    SensorDeviceClass,
+)
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfTime, EntityCategory
+from homeassistant.const import UnitOfTime, UnitOfInformation, UnitOfDataRate, EntityCategory
 
 from ..coordinator import KeeneticCoordinator
-from ..entity import ControllerEntity
+from ..entity import ControllerEntity, WanEntity
 
 
 class KeeneticWanStatusSensor(ControllerEntity, SensorEntity):
@@ -248,3 +253,270 @@ class KeeneticMainPortSensor(ControllerEntity, SensorEntity):
                     attrs["duplex"] = port.get("duplex")
                 return attrs
         return None
+
+# =============================================================================
+# Per-WAN interface sensors
+#
+# One set of these is instantiated per entry in coordinator.data["wan_interfaces"].
+# Each WAN becomes its own HA sub-device (see utils.get_wan_device_info).
+# =============================================================================
+
+
+class _WanSensorBase(WanEntity, SensorEntity):
+    """Shared base for per-WAN SensorEntity classes."""
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: KeeneticCoordinator,
+        entry: ConfigEntry,
+        wan_id: str,
+    ) -> None:
+        WanEntity.__init__(self, coordinator, entry.entry_id, entry.title, wan_id)
+
+
+class KeeneticWanProviderSensor(_WanSensorBase):
+    """Provider / description shown as the entity name."""
+    _attr_icon = "mdi:web"
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._entry_id}_wan_{self._wan_id}_provider"
+
+    @property
+    def name(self) -> str:
+        return "Provider"
+
+    @property
+    def native_value(self) -> str | None:
+        wan = self._wan
+        if not wan:
+            return None
+        return wan.get("description") or wan.get("interface_name") or self._wan_id
+
+
+class KeeneticWanRoleSensor(_WanSensorBase):
+    """Routing role: Default connection / Backup connection N."""
+    _attr_icon = "mdi:sort-numeric-ascending"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._entry_id}_wan_{self._wan_id}_role"
+
+    @property
+    def name(self) -> str:
+        return "Role"
+
+    @property
+    def native_value(self) -> str | None:
+        wan = self._wan
+        if not wan:
+            return None
+        return wan.get("role_label")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        wan = self._wan
+        if not wan:
+            return None
+        return {
+            "priority": wan.get("priority"),
+            "role_index": wan.get("role_index"),
+            "defaultgw": wan.get("defaultgw"),
+        }
+
+
+class KeeneticWanInterfaceSensor(_WanSensorBase):
+    """Underlying interface id (e.g. GigabitEthernet1/Vlan35)."""
+    _attr_icon = "mdi:ethernet-cable"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._entry_id}_wan_{self._wan_id}_interface"
+
+    @property
+    def name(self) -> str:
+        return "Interface"
+
+    @property
+    def native_value(self) -> str | None:
+        wan = self._wan
+        if not wan:
+            return None
+        # The physical/logical carrier (PPPoE `via`) is the most useful
+        # value here; fall back to the WAN's own id for Ethernet WANs
+        # and WireGuard tunnels that have no underlying interface.
+        return wan.get("underlying") or wan.get("id")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        wan = self._wan
+        if not wan:
+            return None
+        return {
+            "wan_id": wan.get("id"),
+            "interface_name": wan.get("interface_name"),
+            "type": wan.get("type"),
+            "remote": wan.get("remote"),
+            "mac": wan.get("mac"),
+        }
+
+
+class KeeneticWanPublicIpSensor(_WanSensorBase):
+    """Public IP address of the WAN (PPPoE / DHCP / static)."""
+    _attr_icon = "mdi:ip-network"
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._entry_id}_wan_{self._wan_id}_public_ip"
+
+    @property
+    def name(self) -> str:
+        return "Public IP"
+
+    @property
+    def native_value(self) -> str | None:
+        wan = self._wan
+        if not wan:
+            return None
+        return wan.get("ip")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        wan = self._wan
+        if not wan:
+            return None
+        return {
+            "mask": wan.get("mask"),
+            "remote": wan.get("remote"),
+            "global": wan.get("global"),
+        }
+
+
+class KeeneticWanUptimeSensor(_WanSensorBase):
+    """Session uptime for the WAN, in seconds."""
+    _attr_icon = "mdi:timer-outline"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.DURATION
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._entry_id}_wan_{self._wan_id}_uptime"
+
+    @property
+    def name(self) -> str:
+        return "Uptime"
+
+    @property
+    def native_unit_of_measurement(self) -> str:
+        return UnitOfTime.SECONDS
+
+    @property
+    def native_value(self) -> int | None:
+        wan = self._wan
+        if not wan:
+            return None
+        up = wan.get("uptime")
+        if up in (None, "", "unknown"):
+            return None
+        try:
+            return int(float(up))
+        except (TypeError, ValueError):
+            return None
+
+
+class _WanBytesBase(_WanSensorBase):
+    """Shared RX/TX byte counter base."""
+    _attr_device_class = SensorDeviceClass.DATA_SIZE
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_native_unit_of_measurement = UnitOfInformation.BYTES
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _field = "rx_bytes"
+
+    @property
+    def native_value(self) -> int | None:
+        wan = self._wan
+        if not wan:
+            return None
+        v = wan.get(self._field)
+        if v is None:
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+
+class KeeneticWanRxBytesSensor(_WanBytesBase):
+    _attr_icon = "mdi:download"
+    _field = "rx_bytes"
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._entry_id}_wan_{self._wan_id}_rx_bytes"
+
+    @property
+    def name(self) -> str:
+        return "RX Bytes"
+
+
+class KeeneticWanTxBytesSensor(_WanBytesBase):
+    _attr_icon = "mdi:upload"
+    _field = "tx_bytes"
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._entry_id}_wan_{self._wan_id}_tx_bytes"
+
+    @property
+    def name(self) -> str:
+        return "TX Bytes"
+
+
+class _WanThroughputBase(_WanSensorBase):
+    _attr_device_class = SensorDeviceClass.DATA_RATE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfDataRate.BYTES_PER_SECOND
+    _attr_suggested_display_precision = 0
+    _field = "rx_throughput"
+
+    @property
+    def native_value(self) -> float | None:
+        wan = self._wan
+        if not wan:
+            return None
+        v = wan.get(self._field)
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+
+class KeeneticWanRxThroughputSensor(_WanThroughputBase):
+    _attr_icon = "mdi:download-network"
+    _field = "rx_throughput"
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._entry_id}_wan_{self._wan_id}_rx_throughput"
+
+    @property
+    def name(self) -> str:
+        return "RX Throughput"
+
+
+class KeeneticWanTxThroughputSensor(_WanThroughputBase):
+    _attr_icon = "mdi:upload-network"
+    _field = "tx_throughput"
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._entry_id}_wan_{self._wan_id}_tx_throughput"
+
+    @property
+    def name(self) -> str:
+        return "TX Throughput"
