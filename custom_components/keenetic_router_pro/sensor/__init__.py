@@ -6,7 +6,7 @@ from typing import Optional
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from ..const import DOMAIN, DATA_COORDINATOR, DATA_CLIENT, CONF_TRACKED_CLIENTS
@@ -26,6 +26,15 @@ from .network import (
     KeeneticActiveConnectionsSensor,
     KeeneticLocalIpSensor,
     KeeneticMainPortSensor,
+    KeeneticWanProviderSensor,
+    KeeneticWanRoleSensor,
+    KeeneticWanInterfaceSensor,
+    KeeneticWanPublicIpSensor,
+    KeeneticWanUptimeSensor,
+    KeeneticWanRxBytesSensor,
+    KeeneticWanTxBytesSensor,
+    KeeneticWanRxThroughputSensor,
+    KeeneticWanTxThroughputSensor,
 )
 from .clients import (
     KeeneticConnectedClientsSensor,
@@ -213,4 +222,48 @@ async def async_setup_entry(
         entities.append(KeeneticClientWifiBandSensor(coordinator, entry, mac, label))
         entities.append(KeeneticClientWifiModeSensor(coordinator, entry, mac, label))
 
+    # Per-WAN sensor set: one sub-device per uplink (Default + backups).
+    # Covers provider name, priority role, underlying interface, public
+    # IP, uptime, byte counters and live throughput.
+    known_wan_ids: set[str] = set()
+
+    def _wan_sensor_set(wan_id: str) -> list[SensorEntity]:
+        return [
+            KeeneticWanProviderSensor(coordinator, entry, wan_id),
+            KeeneticWanRoleSensor(coordinator, entry, wan_id),
+            KeeneticWanInterfaceSensor(coordinator, entry, wan_id),
+            KeeneticWanPublicIpSensor(coordinator, entry, wan_id),
+            KeeneticWanUptimeSensor(coordinator, entry, wan_id),
+            KeeneticWanRxBytesSensor(coordinator, entry, wan_id),
+            KeeneticWanTxBytesSensor(coordinator, entry, wan_id),
+            KeeneticWanRxThroughputSensor(coordinator, entry, wan_id),
+            KeeneticWanTxThroughputSensor(coordinator, entry, wan_id),
+        ]
+
+    for wan in coordinator.data.get("wan_interfaces", []) or []:
+        wan_id = wan.get("id")
+        if not wan_id or wan_id in known_wan_ids:
+            continue
+        known_wan_ids.add(wan_id)
+        entities.extend(_wan_sensor_set(wan_id))
+
     async_add_entities(entities)
+
+    # New WAN interfaces may appear at runtime (LTE stick plugged in,
+    # new WireGuard tunnel configured as uplink, PPPoE redialed on a
+    # different interface). Mirror the binary_sensor platform and add
+    # the per-WAN sensor set on the fly so the user doesn't need to
+    # restart HA.
+    @callback
+    def _async_add_new_wans() -> None:
+        new_entities: list[SensorEntity] = []
+        for wan in coordinator.data.get("wan_interfaces", []) or []:
+            wan_id = wan.get("id")
+            if not wan_id or wan_id in known_wan_ids:
+                continue
+            known_wan_ids.add(wan_id)
+            new_entities.extend(_wan_sensor_set(wan_id))
+        if new_entities:
+            async_add_entities(new_entities)
+
+    entry.async_on_unload(coordinator.async_add_listener(_async_add_new_wans))
