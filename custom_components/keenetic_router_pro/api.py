@@ -1372,15 +1372,22 @@ class KeeneticClient:
             }
 
         A router may have multiple profiles bound to the same interface.
-        Profiles whose name starts with "_" (e.g. `_WEBADMIN_PPPoE0`)
-        are transient artefacts that the web UI creates for one-off
-        connection tests. They often target TEST-NET addresses and
-        stay stale in the config. We ignore them when at least one
-        "real" profile is present; if only underscore-profiles exist,
-        we fall back to them rather than returning nothing.
 
-        When multiple real profiles report on the same interface, the
-        aggregate status is "fail" if any profile is failing (matches
+        IMPORTANT: profiles named `_WEBADMIN_<InterfaceId>` are NOT
+        transient — current Keenetic firmware persists user-enabled
+        Ping Check configurations under that name when the user toggles
+        "Check the Availability of the Internet (Ping Check)" in the
+        web UI. They have real `update-interval`, `max-fails`, real
+        check hosts and live counters, and they ARE the authoritative
+        ping-check signal for that WAN.
+
+        We instead identify *truly* transient profiles by their target
+        address: one-off connection tests target IANA documentation /
+        TEST-NET ranges (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24).
+        Those are the only profiles we ignore.
+
+        When multiple authoritative profiles report on the same interface,
+        the aggregate status is "fail" if any profile is failing (matches
         how Keenetic itself treats the WAN as unusable for routing).
         """
         data = await self._rci_get("show/ping-check") or {}
@@ -1445,22 +1452,35 @@ class KeeneticClient:
                 observations.setdefault(iface_id, []).append(observation)
 
         # Per interface, pick "authoritative" profiles and aggregate.
+        #
+        # We only ignore profiles whose check targets fall entirely
+        # inside IANA TEST-NET / documentation ranges, because those
+        # are the one-off connection tests the web UI fires when the
+        # user clicks "test connection" — they intentionally target
+        # unroutable addresses and would otherwise produce permanent
+        # false "fail" results.
+        #
+        # We do NOT filter by profile name. In particular,
+        # `_WEBADMIN_<InterfaceId>` profiles are persistent, real,
+        # user-enabled Ping Check configurations created from the
+        # router's web UI — they are the authoritative ping-check
+        # signal for that WAN and MUST be honoured.
+        def _is_test_net_only(observation: Dict[str, Any]) -> bool:
+            addrs = observation.get("check_addresses") or []
+            hosts = observation.get("check_hosts") or []
+            candidates = [str(x) for x in (list(addrs) + list(hosts)) if x]
+            if not candidates:
+                return False
+            test_net_prefixes = ("192.0.2.", "198.51.100.", "203.0.113.")
+            return all(c.startswith(test_net_prefixes) for c in candidates)
+
         result: Dict[str, Any] = {}
         for iface_id, obs_list in observations.items():
-            # Drop web-admin transient profiles. These are artefacts the
-            # web UI creates for one-off connection tests (names start
-            # with "_", typically target TEST-NET like 192.0.2.1) and
-            # stay stale in the config long after the test. They MUST
-            # NOT be treated as authoritative — doing so would cause
-            # false-positive outage alarms on a WAN that's actually
-            # fine. When no real profile is attached to an interface,
-            # we return status=None so downstream falls back to the
-            # link+IP heuristic instead of trusting a stale webadmin
-            # result.
-            real = [o for o in obs_list if not str(o.get("profile") or "").startswith("_")]
+            real = [o for o in obs_list if not _is_test_net_only(o)]
 
             if not real:
-                # Only transient/webadmin profiles exist — don't trust them.
+                # Only TEST-NET probe profiles exist — don't trust them,
+                # fall back to the link+IP heuristic downstream.
                 result[iface_id] = {
                     "status": None,
                     "passing": None,
