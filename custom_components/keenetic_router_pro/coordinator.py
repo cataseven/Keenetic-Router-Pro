@@ -39,64 +39,189 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.client = client
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Router'dan verileri çek."""
-        system = await self.client.async_get_system_info()
-        version = await self.client.async_get_current_version_info()
-        version_available = await self.client.async_get_available_version_info()
+        """Fetch all router data with bounded, staged parallelism.
+ 
+        The Keenetic RCI endpoint is a single HTTP surface served by a
+        modest router CPU, so we cap concurrency at 4 in-flight calls
+        with a semaphore. Calls are split into dependency stages:
+ 
+          * Stage 1 has no dependencies and runs first.
+          * Stage 2 needs ``interfaces`` from stage 1.
+          * Stage 3 needs results from stages 1 and 2 (WiFi passwords
+            per SSID, USB devices per connected mesh node).
+ 
+        Within each stage we use ``asyncio.gather`` with
+        ``return_exceptions=True`` so a single failing endpoint can no
+        longer kill the whole update tick — failed fetches are
+        normalised to safe defaults of the same shape the downstream
+        code expects, and the next tick simply retries them.
+        """
+        sem = asyncio.Semaphore(4)
+ 
+        async def _bounded(coro):
+            async with sem:
+                return await coro
+ 
+        def _ok(value, default):
+            """Replace failed fetches with a safe default of the right shape."""
+            if isinstance(value, BaseException):
+                _LOGGER.debug("Coordinator fetch failed, using default: %s", value)
+                return default
+            return value
+ 
+        # ---------- Stage 1: independent fetches ----------
+        (
+            system,
+            version,
+            version_available,
+            interfaces,
+            clients,
+            mesh_nodes,
+            client_stats,
+            host_policies,
+            ndns_info,
+            usb_storage,
+            interface_stats,
+            ping_check_status,
+        ) = await asyncio.gather(
+            _bounded(self.client.async_get_system_info()),
+            _bounded(self.client.async_get_current_version_info()),
+            _bounded(self.client.async_get_available_version_info()),
+            _bounded(self.client.async_get_interfaces()),
+            _bounded(self.client.async_get_clients()),
+            _bounded(self.client.async_get_mesh_nodes()),
+            _bounded(self.client.async_get_client_stats()),
+            _bounded(self.client.async_get_host_policies()),
+            _bounded(self.client.async_get_ndns_info()),
+            _bounded(self.client.async_get_usb_storage()),
+            _bounded(self.client.async_get_all_interface_stats()),
+            _bounded(self.client.async_get_ping_check_status()),
+            return_exceptions=True,
+        )
+ 
+        system = _ok(system, {})
+        version = _ok(version, {})
+        version_available = _ok(version_available, {})
+        interfaces = _ok(interfaces, [])
+        clients = _ok(clients, [])
+        mesh_nodes = _ok(mesh_nodes, [])
+        client_stats = _ok(client_stats, {})
+        host_policies = _ok(host_policies, {})
+        ndns_info = _ok(ndns_info, {})
+        usb_storage = _ok(usb_storage, [])
+        interface_stats = _ok(interface_stats, {})
+        ping_check_status = _ok(ping_check_status, {})
+ 
         merged_system = {**system, **version}
-        merged_system["release-available"] = version_available.get("title") or version_available.get("release")
+        merged_system["release-available"] = (
+            version_available.get("title") or version_available.get("release")
+        )
         merged_system["fw-update-sandbox"] = version_available.get("sandbox")
-        merged_system["fw-update-available"] = version_available.get("update-available", False)
-
-        # Interface verisini bir kez çek, tüm metotlara paylaştır
-        interfaces = await self.client.async_get_interfaces()
-
-        wifi = await self.client.async_get_wifi_networks(interfaces=interfaces)
-        
-        # Fetch WiFi passwords for QR code generation (cache - only fetch if not yet known)
+        merged_system["fw-update-available"] = version_available.get(
+            "update-available", False
+        )
+ 
+        # ---------- Stage 2: depends on stage-1 `interfaces` ----------
+        # All of these accept a pre-fetched ``interfaces=`` argument so
+        # we don't re-query the router for the same data once per call.
+        (
+            wifi,
+            wireguard,
+            vpn_tunnels,
+            wan_status,
+            wan_interfaces,
+            traffic_stats,
+            port_info,
+        ) = await asyncio.gather(
+            _bounded(self.client.async_get_wifi_networks(interfaces=interfaces)),
+            _bounded(self.client.async_get_wireguard_status(interfaces=interfaces)),
+            _bounded(self.client.async_get_vpn_tunnels(interfaces=interfaces)),
+            _bounded(self.client.async_get_wan_status(interfaces=interfaces)),
+            _bounded(self.client.async_get_wan_interfaces(interfaces=interfaces)),
+            _bounded(self.client.async_get_traffic_stats(interfaces=interfaces)),
+            _bounded(self.client.async_get_port_info(interfaces=interfaces)),
+            return_exceptions=True,
+        )
+ 
+        wifi = _ok(wifi, [])
+        wireguard = _ok(wireguard, [])
+        vpn_tunnels = _ok(vpn_tunnels, [])
+        wan_status = _ok(wan_status, {})
+        wan_interfaces = _ok(wan_interfaces, [])
+        traffic_stats = _ok(traffic_stats, {})
+        port_info = _ok(port_info, {})
+ 
+        # ---------- Stage 3a: WiFi passwords (parallel, cached) ----------
+        # We only fetch a password once per SSID/interface and cache it
+        # in coordinator data so subsequent ticks skip these calls
+        # entirely. The first tick after a fresh start does N parallel
+        # fetches; every tick after that does zero.
         wifi_passwords: dict[str, str] = {}
         if self.data:
             wifi_passwords = dict(self.data.get("wifi_passwords", {}))
-        
-        for net in wifi:
-            iface_id = net.get("id")
-            ssid = net.get("ssid")
-            if iface_id and ssid and iface_id not in wifi_passwords:
-                try:
-                    password = await self.client.async_get_wifi_password(iface_id)
-                    if password:
-                        wifi_passwords[iface_id] = password
-                except Exception:
-                    pass
-        wireguard = await self.client.async_get_wireguard_status(interfaces=interfaces)
-        vpn_tunnels = await self.client.async_get_vpn_tunnels(interfaces=interfaces)
-        clients = await self.client.async_get_clients()
-
-        interface_stats = await self.client.async_get_all_interface_stats()
-        
-        # Yeni veriler
-        wan_status = await self.client.async_get_wan_status(interfaces=interfaces)
-        try:
-            wan_interfaces = await self.client.async_get_wan_interfaces(
-                interfaces=interfaces
+ 
+        missing_pw_targets = [
+            (net.get("id"), net.get("ssid"))
+            for net in wifi
+            if net.get("id")
+            and net.get("ssid")
+            and net.get("id") not in wifi_passwords
+        ]
+        if missing_pw_targets:
+            pw_results = await asyncio.gather(
+                *(
+                    _bounded(self.client.async_get_wifi_password(iface_id))
+                    for iface_id, _ssid in missing_pw_targets
+                ),
+                return_exceptions=True,
             )
-        except Exception as err:
-            _LOGGER.debug("async_get_wan_interfaces failed: %s", err)
-            wan_interfaces = []
-
-        # Authoritative ping-check results per WAN (rci/show/ping-check).
-        # This is the same data source that drives the red
-        # "NO INTERNET ACCESS (PING CHECK)" badge in the web UI and the
-        # router's own failover decision.
-        try:
-            ping_check_status = await self.client.async_get_ping_check_status()
-        except Exception as err:
-            _LOGGER.debug("async_get_ping_check_status failed: %s", err)
-            ping_check_status = {}
-
-        # --- Enrich each WAN with role label, byte counters and throughput
+            for (iface_id, _ssid), pw in zip(missing_pw_targets, pw_results):
+                if isinstance(pw, BaseException):
+                    continue
+                if pw:
+                    wifi_passwords[iface_id] = pw
+ 
+        # ---------- Stage 3b: Mesh USB (parallel per node) ----------
+        # Each connected mesh node is queried directly at its own IP
+        # for its USB storage. These calls are independent of each
+        # other and of the main router, so they fan out cleanly.
+        connected_nodes = [
+            n for n in mesh_nodes if n.get("ip") and n.get("connected", False)
+        ]
+ 
+        async def _fetch_node_usb(node: dict[str, Any]) -> list[dict[str, Any]]:
+            node_ip = node.get("ip")
+            cid = node.get("cid")
+            node_name = node.get("name") or node.get("mac") or cid or node_ip
+            try:
+                node_usb = await self.client.async_get_mesh_node_usb(
+                    node_ip=node_ip,
+                    node_name=node_name,
+                    node_cid=cid or "",
+                )
+            except Exception:
+                return []
+            if not node_usb:
+                return []
+            for dev in node_usb:
+                dev["mesh_node_name"] = node_name
+            return node_usb
+ 
+        mesh_usb: list[dict[str, Any]] = []
+        if connected_nodes:
+            node_usb_results = await asyncio.gather(
+                *(_bounded(_fetch_node_usb(n)) for n in connected_nodes),
+                return_exceptions=True,
+            )
+            for res in node_usb_results:
+                if isinstance(res, BaseException):
+                    continue
+                mesh_usb.extend(res)
+ 
+        # ---------- WAN enrichment (CPU-only, runs on already-fetched
+        # data — logic unchanged from the sequential implementation) ----------
         #
-        # We reuse the already-fetched `interface_stats` (show/interface/stat
+        # We reuse the already-fetched ``interface_stats`` (show/interface/stat
         # for every interface) instead of firing extra RCI calls. Throughput
         # is computed as a delta against the previous coordinator tick.
         prev_wan_by_id: dict[str, dict[str, Any]] = {}
@@ -106,13 +231,13 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if pid:
                     prev_wan_by_id[pid] = prev
         now_ts = asyncio.get_event_loop().time()
-
+ 
         def _to_int(v: Any) -> int:
             try:
                 return int(v)
             except (TypeError, ValueError):
                 return 0
-
+ 
         for wan in wan_interfaces:
             wan_id = wan.get("id")
             stats = (interface_stats or {}).get(wan_id) or {}
@@ -128,18 +253,22 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             wan["rx_bytes"] = rx_bytes
             wan["tx_bytes"] = tx_bytes
-            wan["rx_packets"] = _to_int(stats.get("rxpackets") or stats.get("rx-packets"))
-            wan["tx_packets"] = _to_int(stats.get("txpackets") or stats.get("tx-packets"))
+            wan["rx_packets"] = _to_int(
+                stats.get("rxpackets") or stats.get("rx-packets")
+            )
+            wan["tx_packets"] = _to_int(
+                stats.get("txpackets") or stats.get("tx-packets")
+            )
             wan["_sample_ts"] = now_ts
-
+ 
             # --- Authoritative ping-check override ---
             # When the router itself reports a ping-check result for
             # this WAN, trust it over the heuristic. Three cases:
-            #   passing=True  → internet_access=True (ping check ok)
-            #   passing=False → internet_access=False (real outage,
-            #                   the case the feature request is about)
-            #   passing=None  → no real profile attached / mixed state
-            #                   → keep the heuristic value from api.py
+            #   passing=True  -> internet_access=True (ping check ok)
+            #   passing=False -> internet_access=False (real outage,
+            #                    the case the feature request is about)
+            #   passing=None  -> no real profile attached / mixed state
+            #                    -> keep the heuristic value from api.py
             pc = ping_check_status.get(wan_id)
             if pc is not None:
                 wan["ping_check"] = pc
@@ -152,7 +281,7 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             else:
                 wan["ping_check"] = None
                 wan["internet_access_source"] = "heuristic"
-
+ 
             prev = prev_wan_by_id.get(wan_id)
             if prev and prev.get("_sample_ts"):
                 dt = now_ts - float(prev.get("_sample_ts") or 0)
@@ -168,20 +297,21 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             else:
                 wan["rx_throughput"] = 0.0
                 wan["tx_throughput"] = 0.0
-
-        # Role labels: the interface with `defaultgw: true` is the
-        # Default connection. The rest are Backup connection 1..N ordered
-        # by priority descending (higher Keenetic priority = next in line).
+ 
+        # Role labels: the interface with ``defaultgw: true`` is the
+        # Default connection. The rest are Backup connection 1..N
+        # ordered by priority descending (higher Keenetic priority =
+        # next in line for failover).
         default_idx: int | None = None
         for i, wan in enumerate(wan_interfaces):
             if wan.get("defaultgw"):
                 default_idx = i
                 break
-        # Stable order: default first, then backups by priority desc
+ 
         def _prio_key(w: dict[str, Any]) -> int:
             p = w.get("priority")
             return -int(p) if isinstance(p, (int, float)) else 0
-
+ 
         if default_idx is not None:
             default = wan_interfaces[default_idx]
             backups = [
@@ -191,7 +321,7 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ordered = [default] + backups
         else:
             ordered = sorted(wan_interfaces, key=_prio_key)
-
+ 
         for position, wan in enumerate(ordered):
             if position == 0 and (wan.get("defaultgw") or default_idx is None):
                 wan["role_label"] = "Default connection"
@@ -201,47 +331,19 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 wan["role_label"] = f"Backup connection {idx}"
                 wan["role_index"] = idx
         wan_interfaces = ordered
-        mesh_nodes = await self.client.async_get_mesh_nodes()
-        traffic_stats = await self.client.async_get_traffic_stats(interfaces=interfaces)
-        client_stats = await self.client.async_get_client_stats()
-        host_policies = await self.client.async_get_host_policies()
-        ndns_info = await self.client.async_get_ndns_info()
-
-        # Ana router USB
-        usb_storage = await self.client.async_get_usb_storage()
-
-        # Ana router port bilgileri
-        port_info = await self.client.async_get_port_info(interfaces=interfaces)
-
-        # Mesh node USB bilgilerini topla
-        # Her member'ın kendi IP'sine doğrudan bağlanıp USB sorgusu yapar
-        mesh_usb: list[dict[str, Any]] = []
-        for node in mesh_nodes:
-            node_ip = node.get("ip")
-            cid = node.get("cid")
-            if not node_ip or not node.get("connected", False):
-                continue
-            node_name = node.get("name") or node.get("mac") or cid or node_ip
-            try:
-                node_usb = await self.client.async_get_mesh_node_usb(
-                    node_ip=node_ip,
-                    node_name=node_name,
-                    node_cid=cid or "",
-                )
-                if node_usb:
-                    for dev in node_usb:
-                        dev["mesh_node_name"] = node_name
-                    mesh_usb.extend(node_usb)
-            except Exception:
-                pass
-
-        # Önceki client listesini sakla (yeni cihaz tespiti için)
+ 
+        # ---------- New-client detection (unchanged) ----------
         previous_clients = self.data.get("clients", []) if self.data else []
-        previous_macs = {str(c.get("mac") or "").lower() for c in previous_clients if c.get("mac")}
-        
-        current_macs = {str(c.get("mac") or "").lower() for c in clients if c.get("mac")}
+        previous_macs = {
+            str(c.get("mac") or "").lower()
+            for c in previous_clients
+            if c.get("mac")
+        }
+        current_macs = {
+            str(c.get("mac") or "").lower() for c in clients if c.get("mac")
+        }
         new_macs = current_macs - previous_macs
-
+ 
         return {
             "system": merged_system,
             "traffic_stats": traffic_stats,
@@ -261,7 +363,7 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "usb_storage": usb_storage,
             "port_info": port_info,
             "mesh_usb": mesh_usb,
-            "new_clients": new_macs,  # Yeni bağlanan MAC'ler
+            "new_clients": new_macs,
         }
 
 
