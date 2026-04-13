@@ -7,7 +7,7 @@ from datetime import timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import KeeneticClient
 from .const import DOMAIN, FAST_SCAN_INTERVAL, PING_SCAN_INTERVAL, DEFAULT_PING_INTERVAL
@@ -62,10 +62,20 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             async with sem:
                 return await coro
  
-        def _ok(value, default):
-            """Replace failed fetches with a safe default of the right shape."""
+        # Collected per-tick so we can emit a single warning instead of
+        # silently defaulting every failing fetch at debug level.
+        failed_fetches: list[tuple[str, BaseException]] = []
+
+        def _ok(name, value, default):
+            """Replace failed fetches with a safe default of the right shape.
+
+            Failures are recorded in ``failed_fetches`` so the tick can
+            emit a single aggregated warning at the end of stage 2, and
+            so critical fetches can be checked for failure explicitly.
+            """
             if isinstance(value, BaseException):
-                _LOGGER.debug("Coordinator fetch failed, using default: %s", value)
+                failed_fetches.append((name, value))
+                _LOGGER.debug("Coordinator fetch %s failed: %s", name, value)
                 return default
             return value
  
@@ -99,18 +109,34 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return_exceptions=True,
         )
  
-        system = _ok(system, {})
-        version = _ok(version, {})
-        version_available = _ok(version_available, {})
-        interfaces = _ok(interfaces, [])
-        clients = _ok(clients, [])
-        mesh_nodes = _ok(mesh_nodes, [])
-        client_stats = _ok(client_stats, {})
-        host_policies = _ok(host_policies, {})
-        ndns_info = _ok(ndns_info, {})
-        usb_storage = _ok(usb_storage, [])
-        interface_stats = _ok(interface_stats, {})
-        ping_check_status = _ok(ping_check_status, {})
+        system = _ok("system_info", system, {})
+        version = _ok("current_version", version, {})
+        version_available = _ok("available_version", version_available, {})
+        interfaces = _ok("interfaces", interfaces, [])
+        clients = _ok("clients", clients, [])
+        mesh_nodes = _ok("mesh_nodes", mesh_nodes, [])
+        client_stats = _ok("client_stats", client_stats, {})
+        host_policies = _ok("host_policies", host_policies, {})
+        ndns_info = _ok("ndns_info", ndns_info, {})
+        usb_storage = _ok("usb_storage", usb_storage, [])
+        interface_stats = _ok("interface_stats", interface_stats, {})
+        ping_check_status = _ok("ping_check_status", ping_check_status, {})
+
+        # Fail-fast on critical fetches. If the router is unreachable,
+        # auth has expired, or the RCI surface is down, ``system_info``
+        # and ``interfaces`` are the two calls that MUST succeed — every
+        # downstream computation depends on them. Letting them default
+        # to ``{}`` / ``[]`` would produce a ghost-mode tick where every
+        # entity silently shows "zero/empty" instead of ``unavailable``,
+        # masking real outages. Raise ``UpdateFailed`` so HA marks the
+        # coordinator as failed and retries on the next tick.
+        critical_failures = [
+            (name, err) for name, err in failed_fetches
+            if name in ("system_info", "interfaces")
+        ]
+        if critical_failures:
+            details = ", ".join(f"{n}: {e!r}" for n, e in critical_failures)
+            raise UpdateFailed(f"Critical router fetch failed ({details})")
  
         merged_system = {**system, **version}
         merged_system["release-available"] = (
@@ -143,13 +169,26 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return_exceptions=True,
         )
  
-        wifi = _ok(wifi, [])
-        wireguard = _ok(wireguard, [])
-        vpn_tunnels = _ok(vpn_tunnels, [])
-        wan_status = _ok(wan_status, {})
-        wan_interfaces = _ok(wan_interfaces, [])
-        traffic_stats = _ok(traffic_stats, {})
-        port_info = _ok(port_info, {})
+        wifi = _ok("wifi", wifi, [])
+        wireguard = _ok("wireguard", wireguard, [])
+        vpn_tunnels = _ok("vpn_tunnels", vpn_tunnels, [])
+        wan_status = _ok("wan_status", wan_status, {})
+        wan_interfaces = _ok("wan_interfaces", wan_interfaces, [])
+        traffic_stats = _ok("traffic_stats", traffic_stats, {})
+        port_info = _ok("port_info", port_info, {})
+
+        # Emit a single aggregated warning per tick for any non-critical
+        # fetches that fell back to defaults. Keeping this above debug
+        # ensures a user whose router is mostly-working-but-flaky sees
+        # *something* in the default log level instead of silently
+        # getting empty data for the affected entities.
+        if failed_fetches:
+            _LOGGER.warning(
+                "Keenetic coordinator: %d fetch(es) failed this tick and "
+                "fell back to defaults: %s",
+                len(failed_fetches),
+                ", ".join(name for name, _ in failed_fetches),
+            )
  
         # ---------- Stage 3a: WiFi passwords (parallel, cached) ----------
         # We only fetch a password once per SSID/interface and cache it
@@ -190,17 +229,17 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ]
  
         async def _fetch_node_usb(node: dict[str, Any]) -> list[dict[str, Any]]:
+            # Exceptions propagate out and are caught by the outer
+            # ``gather(..., return_exceptions=True)``; one error handler
+            # is clearer than two nested ones.
             node_ip = node.get("ip")
             cid = node.get("cid")
             node_name = node.get("name") or node.get("mac") or cid or node_ip
-            try:
-                node_usb = await self.client.async_get_mesh_node_usb(
-                    node_ip=node_ip,
-                    node_name=node_name,
-                    node_cid=cid or "",
-                )
-            except Exception:
-                return []
+            node_usb = await self.client.async_get_mesh_node_usb(
+                node_ip=node_ip,
+                node_name=node_name,
+                node_cid=cid or "",
+            )
             if not node_usb:
                 return []
             for dev in node_usb:
@@ -434,7 +473,7 @@ class KeeneticPingCoordinator(DataUpdateCoordinator[dict[str, bool]]):
         self.client = client
         self._tracked_clients = tracked_clients
         self._privileged: bool | None = None  # Will be determined on first ping
-        
+
         # MAC -> IP mapping (güncellenebilir)
         self._mac_to_ip: dict[str, str] = {}
         for c in tracked_clients:
@@ -531,7 +570,7 @@ class KeeneticPingCoordinator(DataUpdateCoordinator[dict[str, bool]]):
             # İlk denemede privileged mode'u belirle
             if self._privileged is None:
                 self._privileged = self.PING_PRIVILEGED
-            
+
             # Gerçek ICMP ping gönder
             result = await async_ping(
                 ip,
@@ -539,7 +578,7 @@ class KeeneticPingCoordinator(DataUpdateCoordinator[dict[str, bool]]):
                 timeout=self.PING_TIMEOUT,
                 privileged=self._privileged,
             )
-            
+
             is_alive = result.is_alive
             _LOGGER.debug(
                 "Ping %s: alive=%s, packets_sent=%d, packets_received=%d, avg_rtt=%.2fms",
@@ -550,7 +589,7 @@ class KeeneticPingCoordinator(DataUpdateCoordinator[dict[str, bool]]):
                 result.avg_rtt if result.avg_rtt else 0,
             )
             return is_alive
-            
+
         except SocketPermissionError:
             # Unprivileged mode çalışmadıysa privileged dene
             if not self._privileged:
@@ -565,7 +604,7 @@ class KeeneticPingCoordinator(DataUpdateCoordinator[dict[str, bool]]):
                 "sudo sysctl -w net.ipv4.ping_group_range='0 2147483647'"
             )
             return False
-            
+
         except BaseException as err:
             # asyncio.CancelledError Python 3.8+'da BaseException'dan türer,
             # bu yüzden normal Exception bloğu onu yakalamaz.
