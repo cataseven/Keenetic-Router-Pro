@@ -85,6 +85,14 @@ from .client import (
     KeeneticClientWifiBandSensor,
     KeeneticClientWifiModeSensor,   
 )
+from .crypto import (
+    KeeneticCryptoMapStateSensor,
+    KeeneticCryptoMapIkeStateSensor,
+    KeeneticCryptoMapRxBytesSensor,
+    KeeneticCryptoMapTxBytesSensor,
+    KeeneticCryptoMapRxThroughputSensor,
+    KeeneticCryptoMapTxThroughputSensor,
+)
 
 
 async def async_setup_entry(
@@ -247,15 +255,38 @@ async def async_setup_entry(
         known_wan_ids.add(wan_id)
         entities.extend(_wan_sensor_set(wan_id))
 
+    # Per-crypto-map sensor set: one sub-device per site-to-site
+    # IPsec tunnel. Covers the two state strings (tunnel, IKE), byte
+    # counters and live throughput. Connected binary_sensor and the
+    # Enabled switch live on their respective platforms.
+    known_cmap_names: set[str] = set()
+
+    def _crypto_map_sensor_set(cmap_name: str) -> list[SensorEntity]:
+        return [
+            KeeneticCryptoMapStateSensor(coordinator, entry, cmap_name),
+            KeeneticCryptoMapIkeStateSensor(coordinator, entry, cmap_name),
+            KeeneticCryptoMapRxBytesSensor(coordinator, entry, cmap_name),
+            KeeneticCryptoMapTxBytesSensor(coordinator, entry, cmap_name),
+            KeeneticCryptoMapRxThroughputSensor(coordinator, entry, cmap_name),
+            KeeneticCryptoMapTxThroughputSensor(coordinator, entry, cmap_name),
+        ]
+
+    for cmap_name in (coordinator.data.get("crypto_maps") or {}).keys():
+        if cmap_name in known_cmap_names:
+            continue
+        known_cmap_names.add(cmap_name)
+        entities.extend(_crypto_map_sensor_set(cmap_name))
+
     async_add_entities(entities)
 
     # New WAN interfaces may appear at runtime (LTE stick plugged in,
     # new WireGuard tunnel configured as uplink, PPPoE redialed on a
     # different interface). Mirror the binary_sensor platform and add
     # the per-WAN sensor set on the fly so the user doesn't need to
-    # restart HA.
+    # restart HA. Crypto maps added from the web UI fan out through
+    # the same listener.
     @callback
-    def _async_add_new_wans() -> None:
+    def _async_add_new_dynamic_entities() -> None:
         new_entities: list[SensorEntity] = []
         for wan in coordinator.data.get("wan_interfaces", []) or []:
             wan_id = wan.get("id")
@@ -263,7 +294,14 @@ async def async_setup_entry(
                 continue
             known_wan_ids.add(wan_id)
             new_entities.extend(_wan_sensor_set(wan_id))
+        for cmap_name in (coordinator.data.get("crypto_maps") or {}).keys():
+            if cmap_name in known_cmap_names:
+                continue
+            known_cmap_names.add(cmap_name)
+            new_entities.extend(_crypto_map_sensor_set(cmap_name))
         if new_entities:
             async_add_entities(new_entities)
 
-    entry.async_on_unload(coordinator.async_add_listener(_async_add_new_wans))
+    entry.async_on_unload(
+        coordinator.async_add_listener(_async_add_new_dynamic_entities)
+    )
