@@ -9,6 +9,7 @@ from .utils import (
     get_mesh_device_info,
     get_client_device_info,
     get_wan_device_info,
+    get_crypto_map_device_info,
 )
 
 
@@ -167,6 +168,54 @@ class WanEntity(CoordinatorEntity):
             description=wan.get("description"),
             iface_type=wan.get("type"),
             role_label=wan.get("role_label"),
+        )
+
+
+class CryptoMapEntity(CoordinatorEntity):
+    """Base class for per-`crypto map` site-to-site IPsec entities.
+
+    Each configured crypto map is exposed in HA as its own sub-device
+    under the main router, mirroring the per-WAN model.
+    """
+
+    def __init__(
+        self,
+        coordinator: KeeneticCoordinator,
+        entry_id: str,
+        title: str,
+        cmap_name: str,
+    ) -> None:
+        super().__init__(coordinator)
+        self._entry_id = entry_id
+        self._title = title
+        self._cmap_name = cmap_name
+
+    @property
+    def _cmap(self) -> Optional[Dict[str, Any]]:
+        """Return the current dict for this crypto map, or None if it
+        has been removed from the router config since we were created."""
+        cmaps = self.coordinator.data.get("crypto_maps") or {}
+        if not isinstance(cmaps, dict):
+            return None
+        entry = cmaps.get(self._cmap_name)
+        return entry if isinstance(entry, dict) else None
+
+    @property
+    def available(self) -> bool:
+        # Mirror CoordinatorEntity.available but additionally require
+        # that our tunnel is still present in the router config. If
+        # the user deletes the crypto map, our entities become
+        # unavailable rather than stale.
+        return super().available and self._cmap is not None
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        cmap = self._cmap or {}
+        return get_crypto_map_device_info(
+            title=self._title,
+            entry_id=self._entry_id,
+            cmap_name=self._cmap_name,
+            remote_peer=cmap.get("remote_peer"),
         )
 
 

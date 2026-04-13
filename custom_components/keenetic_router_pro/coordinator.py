@@ -66,15 +66,22 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # silently defaulting every failing fetch at debug level.
         failed_fetches: list[tuple[str, BaseException]] = []
 
-        def _ok(name, value, default):
+        def _ok(name, value, default, silent: bool = False):
             """Replace failed fetches with a safe default of the right shape.
 
             Failures are recorded in ``failed_fetches`` so the tick can
             emit a single aggregated warning at the end of stage 2, and
             so critical fetches can be checked for failure explicitly.
+
+            Pass ``silent=True`` for endpoints that legitimately may
+            not exist on all firmwares (e.g. optional components like
+            IPsec site-to-site). The default is still substituted but
+            the failure is not added to the warning aggregate — the
+            api layer is expected to debug-log the reason itself.
             """
             if isinstance(value, BaseException):
-                failed_fetches.append((name, value))
+                if not silent:
+                    failed_fetches.append((name, value))
                 _LOGGER.debug("Coordinator fetch %s failed: %s", name, value)
                 return default
             return value
@@ -93,6 +100,7 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             usb_storage,
             interface_stats,
             ping_check_status,
+            crypto_maps,
         ) = await asyncio.gather(
             _bounded(self.client.async_get_system_info()),
             _bounded(self.client.async_get_current_version_info()),
@@ -106,6 +114,7 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _bounded(self.client.async_get_usb_storage()),
             _bounded(self.client.async_get_all_interface_stats()),
             _bounded(self.client.async_get_ping_check_status()),
+            _bounded(self.client.async_get_crypto_maps()),
             return_exceptions=True,
         )
  
@@ -121,6 +130,13 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         usb_storage = _ok("usb_storage", usb_storage, [])
         interface_stats = _ok("interface_stats", interface_stats, {})
         ping_check_status = _ok("ping_check_status", ping_check_status, {})
+        # Crypto maps: not every router/firmware has the IPsec component,
+        # so this endpoint may be unavailable. Mark the fetch as silent
+        # so an absent endpoint doesn't produce a warning on every tick —
+        # the api layer already debug-logs the reason.
+        crypto_maps = _ok(
+            "crypto_maps", crypto_maps, {}, silent=True
+        )
 
         # Fail-fast on critical fetches. If the router is unreachable,
         # auth has expired, or the RCI surface is down, ``system_info``
@@ -336,7 +352,40 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             else:
                 wan["rx_throughput"] = 0.0
                 wan["tx_throughput"] = 0.0
- 
+
+        # ---------- Crypto map (site-to-site IPsec) enrichment ----------
+        # Same delta pattern as the WAN block above. Counters reset to
+        # zero whenever a phase2 SA rekeys or the tunnel bounces — the
+        # negative-delta clamp keeps throughput sensors from spiking
+        # to absurd negative values on those events.
+        prev_cmap_by_name: dict[str, dict[str, Any]] = {}
+        if self.data:
+            for pname, pentry in (self.data.get("crypto_maps") or {}).items():
+                if isinstance(pentry, dict):
+                    prev_cmap_by_name[pname] = pentry
+
+        for cmap_name, cmap in crypto_maps.items():
+            cmap["_sample_ts"] = now_ts
+
+            prev_cmap = prev_cmap_by_name.get(cmap_name)
+            if prev_cmap and prev_cmap.get("_sample_ts"):
+                dt = now_ts - float(prev_cmap.get("_sample_ts") or 0)
+                if dt > 0:
+                    d_rx = cmap["rx_bytes"] - _to_int(prev_cmap.get("rx_bytes"))
+                    d_tx = cmap["tx_bytes"] - _to_int(prev_cmap.get("tx_bytes"))
+                    cmap["rx_throughput"] = (
+                        max(0.0, d_rx / dt) if d_rx >= 0 else 0.0
+                    )
+                    cmap["tx_throughput"] = (
+                        max(0.0, d_tx / dt) if d_tx >= 0 else 0.0
+                    )
+                else:
+                    cmap["rx_throughput"] = 0.0
+                    cmap["tx_throughput"] = 0.0
+            else:
+                cmap["rx_throughput"] = 0.0
+                cmap["tx_throughput"] = 0.0
+
         # Role labels: the interface with ``defaultgw: true`` is the
         # Default connection. The rest are Backup connection 1..N
         # ordered by priority descending (higher Keenetic priority =
@@ -402,6 +451,7 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "usb_storage": usb_storage,
             "port_info": port_info,
             "mesh_usb": mesh_usb,
+            "crypto_maps": crypto_maps,
             "new_clients": new_macs,
         }
 

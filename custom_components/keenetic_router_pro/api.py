@@ -1556,6 +1556,234 @@ class KeeneticClient:
 
         return result
 
+    async def async_get_crypto_maps(self) -> Dict[str, Dict[str, Any]]:
+        """Return site-to-site IPsec tunnels (`crypto map` entries).
+
+        Endpoint: rci/show/crypto/map
+
+        Site-to-site IPsec tunnels do NOT appear as virtual interfaces
+        in /rci/show/interface, so they need their own data path and
+        their own entity model — they can't piggyback on the existing
+        per-WAN / per-VPN-client plumbing that other VPN types use.
+
+        The router response looks like (tunnel that never came up):
+            {
+              "crypto_map": {
+                "TEST": {
+                  "config": {
+                    "remote_peer": "192.0.2.1",
+                    "enabled": "yes",              # NOTE: string, not bool
+                    "crypto_ipsec_profile_name": "TEST",
+                    "mode": "tunnel"
+                  },
+                  "status": {
+                    "primary_peer": true,
+                    "initiator": true,
+                    "ike_state": "UNDEFINED",
+                    "state": "UNDEFINED",
+                    "via": "PPPoE0",
+                    "local-endpoint-address": "78.188.13.104",
+                    "remote-endpoint-address": "192.0.2.1"
+                  }
+                }
+              }
+            }
+
+        A fully established tunnel additionally has `status.phase1`
+        (dict) and `status.phase2_sa_list.phase2_sa` (list of SA dicts
+        with in_bytes / out_bytes counters). We treat those as optional
+        because the router only populates them once SA negotiation has
+        actually happened.
+
+        We normalise to:
+            {
+              "<name>": {
+                "name": "TEST",
+                "enabled": True,                   # config.enabled == "yes"
+                "remote_peer": "192.0.2.1",
+                "mode": "tunnel",
+                "ipsec_profile_name": "TEST",
+                "state": "UNDEFINED",              # status.state
+                "ike_state": "UNDEFINED",          # status.phase1.ike_state
+                                                   #   or status.ike_state
+                "connected": False,                # state == PHASE2_ESTABLISHED
+                "via": "PPPoE0" or None,
+                "local_endpoint": "78.188.13.104" or None,
+                "remote_endpoint": "192.0.2.1" or None,
+                "rx_bytes": 1506697,               # sum across phase2 SAs
+                "tx_bytes": 129642,                # sum across phase2 SAs
+                "rx_packets": 2950,
+                "tx_packets": 2360,
+                "phase1": {...} or None,           # raw, for v2 sensors
+                "phase2_sa_list": [...] or [],     # raw, normalised to list
+                "raw_status": {...},               # raw status for diag
+                "raw_config": {...},
+              }
+            }
+        """
+        try:
+            data = await self._rci_get("show/crypto/map") or {}
+        except Exception as err:
+            # Endpoint may not exist on older firmwares or on routers
+            # without the IPsec component installed. Debug-log and
+            # return empty — the coordinator's _ok helper will keep
+            # this out of the warning aggregation.
+            _LOGGER.debug("show/crypto/map unavailable: %s", err)
+            return {}
+
+        raw_maps = data.get("crypto_map") or {}
+        if not isinstance(raw_maps, dict):
+            return {}
+
+        def _clean_addr(v: Any) -> str | None:
+            """Reject '0.0.0.0' / empty / None placeholders."""
+            if v is None:
+                return None
+            s = str(v).strip()
+            if not s or s == "0.0.0.0" or s == "::":
+                return None
+            return s
+
+        def _clean_str(v: Any) -> str | None:
+            if v is None:
+                return None
+            s = str(v).strip()
+            return s or None
+
+        def _to_int(v: Any) -> int:
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return 0
+
+        def _as_list(v: Any) -> List[Any]:
+            """Keenetic sometimes collapses single-entry lists to a
+            dict. Normalise to a real list so downstream code can
+            always iterate."""
+            if v is None:
+                return []
+            if isinstance(v, list):
+                return v
+            if isinstance(v, dict):
+                return [v]
+            return []
+
+        result: Dict[str, Dict[str, Any]] = {}
+        for name, entry in raw_maps.items():
+            if not isinstance(entry, dict):
+                continue
+
+            config = entry.get("config") or {}
+            status = entry.get("status") or {}
+            if not isinstance(config, dict):
+                config = {}
+            if not isinstance(status, dict):
+                status = {}
+
+            # phase1 may live either under status.phase1 (when router
+            # has negotiated) or — on some firmwares — the ike_state
+            # field alone is promoted to status.ike_state with no
+            # phase1 block. Handle both.
+            phase1 = status.get("phase1")
+            if not isinstance(phase1, dict):
+                phase1 = None
+
+            ike_state = None
+            if phase1:
+                ike_state = _clean_str(phase1.get("ike_state"))
+            if not ike_state:
+                ike_state = _clean_str(status.get("ike_state"))
+
+            # phase2 SA list — present only when SAs have been set up.
+            p2_wrapper = status.get("phase2_sa_list") or {}
+            if not isinstance(p2_wrapper, dict):
+                p2_wrapper = {}
+            phase2_sa_list = _as_list(p2_wrapper.get("phase2_sa"))
+
+            rx_bytes = 0
+            tx_bytes = 0
+            rx_packets = 0
+            tx_packets = 0
+            for sa in phase2_sa_list:
+                if not isinstance(sa, dict):
+                    continue
+                rx_bytes += _to_int(sa.get("in_bytes"))
+                tx_bytes += _to_int(sa.get("out_bytes"))
+                rx_packets += _to_int(sa.get("in_packets"))
+                tx_packets += _to_int(sa.get("out_packets"))
+
+            state = _clean_str(status.get("state"))
+            connected = state == "PHASE2_ESTABLISHED"
+
+            result[name] = {
+                "name": name,
+                "enabled": str(config.get("enabled", "")).lower() == "yes",
+                "remote_peer": _clean_str(config.get("remote_peer")),
+                "mode": _clean_str(config.get("mode")),
+                "ipsec_profile_name": _clean_str(
+                    config.get("crypto_ipsec_profile_name")
+                ),
+                "state": state,
+                "ike_state": ike_state,
+                "connected": connected,
+                "via": _clean_str(status.get("via")),
+                "local_endpoint": _clean_addr(
+                    status.get("local-endpoint-address")
+                ),
+                "remote_endpoint": _clean_addr(
+                    status.get("remote-endpoint-address")
+                ),
+                "rx_bytes": rx_bytes,
+                "tx_bytes": tx_bytes,
+                "rx_packets": rx_packets,
+                "tx_packets": tx_packets,
+                "phase1": phase1,
+                "phase2_sa_list": phase2_sa_list,
+                "raw_config": config,
+                "raw_status": status,
+            }
+
+        return result
+
+    async def async_set_crypto_map_enabled(
+        self, name: str, enabled: bool
+    ) -> None:
+        """Enable or disable a site-to-site IPsec `crypto map` entry.
+
+        Unlike VPN-client interfaces (which are toggled via
+        `interface X up/down`), site-to-site tunnels live under the
+        `crypto map <name>` configuration sub-mode. The CLI pattern is:
+
+            crypto map <name>
+              enable     (or: no enable)
+
+        We send this as a single RCI parse call with an embedded
+        newline. Changes are runtime-only until persisted, so we
+        follow up with `system configuration save` so the toggle
+        survives a reboot — matching the user's expectation that a
+        Home Assistant switch toggle is permanent.
+        """
+        verb = "enable" if enabled else "no enable"
+        cmd = f"crypto map {name}\n{verb}"
+        _LOGGER.debug(
+            "Set crypto map %s enabled=%s via: %r", name, enabled, cmd
+        )
+        await self._rci_parse(cmd)
+        # Persist so the change survives a reboot. Without this the
+        # toggle is lost on the next router restart and the user sees
+        # the switch "flip back" with no obvious reason.
+        try:
+            await self._rci_parse("system configuration save")
+        except Exception as err:
+            _LOGGER.warning(
+                "crypto map %s toggled to enabled=%s but "
+                "'system configuration save' failed: %s — change will "
+                "be lost on reboot",
+                name,
+                enabled,
+                err,
+            )
+
 
     async def async_get_mesh_nodes(self) -> List[Dict[str, Any]]:
         """Get mesh/extender nodes status from mws/member endpoint.

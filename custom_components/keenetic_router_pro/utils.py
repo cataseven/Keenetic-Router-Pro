@@ -117,6 +117,39 @@ def get_wan_device_info(
     }
 
 
+def get_crypto_map_device_info(
+    title: str,
+    entry_id: str,
+    cmap_name: str,
+    remote_peer: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Device info for a single site-to-site IPsec `crypto map` tunnel.
+
+    Each configured tunnel appears in HA as its own sub-device under
+    the main router, so the user can see one card per tunnel with all
+    its sensors grouped (state, IKE state, RX/TX, throughput, enable
+    switch, ...).
+
+    The HA device identifier is keyed on the crypto map name, which
+    is stable for the lifetime of the tunnel. Renaming the tunnel in
+    the router web UI will orphan the old HA device and create a new
+    one — there is no truly stable id for a crypto map entry, so this
+    is an accepted tradeoff.
+    """
+    name_parts = [cmap_name]
+    if remote_peer:
+        name_parts.append(f"→ {remote_peer}")
+    device_name = " ".join(name_parts)
+
+    return {
+        "identifiers": {(DOMAIN, f"{entry_id}_cmap_{cmap_name}")},
+        "name": f"{title} — IPsec {device_name}",
+        "manufacturer": "Keenetic",
+        "model": "IPsec site-to-site tunnel",
+        "via_device": (DOMAIN, entry_id),
+    }
+
+
 def get_client_device_info(
     entry_id: str,
     mac: str,

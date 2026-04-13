@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import DOMAIN, DATA_COORDINATOR
 from .coordinator import KeeneticCoordinator
-from .entity import MeshEntity, ControllerEntity, WanEntity
+from .entity import MeshEntity, ControllerEntity, WanEntity, CryptoMapEntity
 
 
 async def async_setup_entry(
@@ -46,13 +46,28 @@ async def async_setup_entry(
         entities.append(KeeneticWanConnectedSensor(coordinator, entry, wan_id))
         entities.append(KeeneticWanEnabledSensor(coordinator, entry, wan_id))
 
+    # Per-crypto-map binary sensor: "Connected" (phase2 established).
+    # Tunnels can be added/removed at runtime via the web UI, so we
+    # also register a listener below to catch new ones.
+    known_cmap_names: set[str] = set()
+    for cmap_name in (coordinator.data.get("crypto_maps") or {}).keys():
+        if cmap_name in known_cmap_names:
+            continue
+        known_cmap_names.add(cmap_name)
+        entities.append(
+            KeeneticCryptoMapConnectedSensor(coordinator, entry, cmap_name)
+        )
+
     if entities:
         async_add_entities(entities)
 
     # New WAN interfaces may appear later (LTE stick plugged in, a new
     # PPPoE dialed, an extra WireGuard tunnel configured as uplink).
+    # Site-to-site IPsec tunnels can also be added/removed at runtime
+    # via the web UI — both kinds of sub-device fan out through this
+    # single listener so we use one listener slot for both.
     @callback
-    def _async_add_new_wans() -> None:
+    def _async_add_new_sub_devices() -> None:
         new_entities: list[BinarySensorEntity] = []
         for wan in coordinator.data.get("wan_interfaces", []) or []:
             wan_id = wan.get("id")
@@ -65,10 +80,21 @@ async def async_setup_entry(
             new_entities.append(
                 KeeneticWanEnabledSensor(coordinator, entry, wan_id)
             )
+        for cmap_name in (coordinator.data.get("crypto_maps") or {}).keys():
+            if cmap_name in known_cmap_names:
+                continue
+            known_cmap_names.add(cmap_name)
+            new_entities.append(
+                KeeneticCryptoMapConnectedSensor(
+                    coordinator, entry, cmap_name
+                )
+            )
         if new_entities:
             async_add_entities(new_entities)
 
-    entry.async_on_unload(coordinator.async_add_listener(_async_add_new_wans))
+    entry.async_on_unload(
+        coordinator.async_add_listener(_async_add_new_sub_devices)
+    )
 
 
 class KeeneticWanConnectedSensor(WanEntity, BinarySensorEntity):
@@ -436,4 +462,54 @@ class KeeneticMeshUpdateSensor(MeshEntity, BinarySensorEntity):
             "model": node.get("model"),
             "current_version": node.get("firmware"),
             "available_version": node.get("firmware_available"),
+        }
+
+class KeeneticCryptoMapConnectedSensor(CryptoMapEntity, BinarySensorEntity):
+    """Per-tunnel "Connected" sensor for site-to-site IPsec.
+
+    True when the tunnel has a fully negotiated phase-2 SA. The
+    underlying field is ``status.state`` from ``show/crypto/map``;
+    the only value we treat as "up" is ``PHASE2_ESTABLISHED``. Every
+    other state (``UNDEFINED``, ``CONNECTING``, ``PHASE1_ONLY``,
+    etc.) or a missing state is treated as "not connected".
+    """
+
+    _attr_has_entity_name = True
+    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+
+    def __init__(
+        self,
+        coordinator: KeeneticCoordinator,
+        entry: ConfigEntry,
+        cmap_name: str,
+    ) -> None:
+        CryptoMapEntity.__init__(
+            self, coordinator, entry.entry_id, entry.title, cmap_name
+        )
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._entry_id}_cmap_{self._cmap_name}_connected"
+
+    @property
+    def name(self) -> str:
+        return "Connected"
+
+    @property
+    def is_on(self) -> bool:
+        cmap = self._cmap
+        if cmap is None:
+            return False
+        return bool(cmap.get("connected"))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        cmap = self._cmap
+        if cmap is None:
+            return None
+        return {
+            "state": cmap.get("state"),
+            "ike_state": cmap.get("ike_state"),
+            "via": cmap.get("via"),
+            "remote_peer": cmap.get("remote_peer"),
         }
