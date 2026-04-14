@@ -805,21 +805,35 @@ class KeeneticClient:
             g = groups.setdefault(
                 group_key,
                 {
-                    "ssid": ssid,
+                    "ssid": "",
                     "group": group,
                     "aps": [],
                 },
             )
 
-            if not g["ssid"]:
-                if ssid:
-                    g["ssid"] = ssid
-                elif group and group in bridge_labels:
-                    g["ssid"] = bridge_labels[group]
-                elif group:
-                    g["ssid"] = group
+            # A real broadcast SSID from any AP in the group always wins.
+            # This matters because Keenetic omits the `ssid` field on
+            # disabled APs: on dual-band networks the 2.4 GHz AP may come
+            # first with no SSID, and if we let a bridge-label fallback
+            # latch in here, we would never pick up the real SSID from
+            # the 5 GHz AP that arrives later.
+            if ssid:
+                g["ssid"] = ssid
 
             g["aps"].append(item)
+
+        # Second pass: any group that still has no real SSID (e.g. every
+        # AP in the group is disabled and the firmware stripped the field
+        # from all of them) falls back to the bridge label or group id,
+        # so the entry at least has *some* logical name for display.
+        for g in groups.values():
+            if g["ssid"]:
+                continue
+            grp = g["group"]
+            if grp and grp in bridge_labels:
+                g["ssid"] = bridge_labels[grp]
+            elif grp:
+                g["ssid"] = grp
 
         wifi_networks: List[Dict[str, Any]] = []
 
