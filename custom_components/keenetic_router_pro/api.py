@@ -10,6 +10,7 @@ import async_timeout
 import asyncio
 import base64
 import hashlib
+import ipaddress
 import logging
 import re
 
@@ -144,7 +145,20 @@ class KeeneticClient:
         self._use_challenge_auth = use_challenge_auth
 
         scheme = "https" if ssl else "http"
-        self._base = f"{scheme}://{host}:{port}"
+        # Bracket IPv6 literals so the URL is valid (#57). A bare
+        # ``http://2a00:...:4ee2:100/`` is ambiguous — yarl/aiohttp cannot
+        # tell the address colons from the port separator. Hostnames, IPv4,
+        # and already-bracketed values pass through unchanged.
+        host_part = host
+        try:
+            if isinstance(host, str) and isinstance(
+                ipaddress.ip_address(host), ipaddress.IPv6Address
+            ):
+                host_part = f"[{host}]"
+        except ValueError:
+            # Not a bare IP literal (hostname / KeenDNS / already bracketed).
+            pass
+        self._base = f"{scheme}://{host_part}:{port}"
 
         self._session: Optional[aiohttp.ClientSession] = None
         self._auth_header: Optional[Dict[str, str]] = None

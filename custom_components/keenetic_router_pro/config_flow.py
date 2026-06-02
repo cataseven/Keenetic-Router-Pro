@@ -117,9 +117,12 @@ class KeeneticRouterProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             try:
-                if self._discovered_host and user_input.get(CONF_HOST) == "192.168.1.1":
-                    user_input[CONF_HOST] = self._discovered_host
-                    _LOGGER.debug("Using discovered host: %s", user_input[CONF_HOST])
+                # NOTE (#57): the SSDP-discovered host is offered only as the
+                # *default* for the Host field (see ``default_host`` below) — it
+                # is never force-substituted over what the user submitted.
+                # Forcing it broke setups whose router really is at 192.168.1.1
+                # but was discovered over IPv6: the user typing the IPv4 address
+                # got silently overridden with an unreachable IPv6 host.
 
                 # Defensive host normalisation — strip the most common
                 # paste-mistakes users make when setting up KeenDNS
