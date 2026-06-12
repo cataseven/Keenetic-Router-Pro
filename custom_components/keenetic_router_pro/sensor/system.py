@@ -11,6 +11,7 @@ from homeassistant.const import PERCENTAGE, UnitOfTime, EntityCategory
 from ..coordinator import KeeneticCoordinator
 from ..entity import ControllerEntity, MeshEntity
 from ..utils import clamp_percent, safe_float, safe_int
+from .monotonic import MonotonicUptimeMixin
 
 
 class KeeneticCpuLoadSensor(ControllerEntity, SensorEntity):
@@ -97,7 +98,7 @@ class KeeneticMemoryUsageSensor(ControllerEntity, SensorEntity):
         return None
 
 
-class KeeneticUptimeSensor(ControllerEntity, SensorEntity):
+class KeeneticUptimeSensor(ControllerEntity, MonotonicUptimeMixin, SensorEntity):
     """Router uptime sensor."""
     _attr_has_entity_name = True
     _attr_translation_key = "uptime"
@@ -109,6 +110,8 @@ class KeeneticUptimeSensor(ControllerEntity, SensorEntity):
     # weeks-long sawtooth in the long-term-statistics table. With
     # TOTAL_INCREASING the recorder collapses each "session" into a
     # single increasing curve and resets cleanly on reboot.
+    # Issue #60: MonotonicUptimeMixin shields the recorder from any
+    # sub-10% counter dips (stale RCI snapshots and the like).
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
     _attr_suggested_display_precision = 0
 
@@ -145,7 +148,7 @@ class KeeneticUptimeSensor(ControllerEntity, SensorEntity):
             # TypeError/ValueError cases the old code caught.
             parsed = safe_int(value)
             if parsed is not None:
-                return parsed
+                return self._clamp_monotonic(parsed)
 
         return None
 

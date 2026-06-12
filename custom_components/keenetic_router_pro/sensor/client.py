@@ -12,6 +12,7 @@ from ..coordinator import KeeneticCoordinator
 from ..entity import ClientEntity
 from ..const import DOMAIN
 from ..utils import safe_float, safe_int
+from .monotonic import MonotonicUptimeMixin
 
 
 class KeeneticClientIpSensor(ClientEntity, SensorEntity):
@@ -119,7 +120,7 @@ class KeeneticClientLinkSensor(ClientEntity, SensorEntity):
         return "mdi:link-off"
 
 
-class KeeneticClientUptimeSensor(ClientEntity, SensorEntity):
+class KeeneticClientUptimeSensor(ClientEntity, MonotonicUptimeMixin, SensorEntity):
     """Uptime sensor for client."""
     # Opt out of the base-class fingerprint dedup: this sensor's
     # native_value reads from a field that the parent entity's
@@ -131,6 +132,13 @@ class KeeneticClientUptimeSensor(ClientEntity, SensorEntity):
     _attr_device_class = SensorDeviceClass.DURATION
     # TOTAL_INCREASING: client Wi-Fi session uptime resets on re-association,
     # matches the router/mesh/PPPoE/WireGuard rationale.
+    #
+    # Issue #60: the router sometimes reports a slightly *lower* uptime
+    # (a few % — e.g. roaming between mesh members or a power-save
+    # blip re-basing the session counter) which lands in the recorder's
+    # "not strictly increasing" warning band. MonotonicUptimeMixin
+    # holds the high-water mark across such dips and passes genuine
+    # re-association resets (drops below 90%) through untouched.
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
     _attr_suggested_display_precision = 0
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -162,7 +170,7 @@ class KeeneticClientUptimeSensor(ClientEntity, SensorEntity):
         if client:
             uptime = client.get("uptime")
             if uptime not in (None, "", "unknown", "Unknown"):
-                return safe_int(uptime)
+                return self._clamp_monotonic(safe_int(uptime))
         return None
 
 

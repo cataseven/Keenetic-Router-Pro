@@ -15,6 +15,7 @@ from homeassistant.const import UnitOfDataRate, UnitOfTime, EntityCategory
 from ..coordinator import KeeneticCoordinator
 from ..entity import ControllerEntity, MeshEntity
 from ..utils import clamp_percent, safe_float, safe_int
+from .monotonic import MonotonicUptimeMixin
 
 
 class KeeneticMeshSystemStateSensor(ControllerEntity, SensorEntity):
@@ -110,7 +111,7 @@ class KeeneticMeshSystemStateSensor(ControllerEntity, SensorEntity):
         }
 
 
-class KeeneticMeshUptimeSensor(MeshEntity, SensorEntity):
+class KeeneticMeshUptimeSensor(MeshEntity, MonotonicUptimeMixin, SensorEntity):
     """Mesh node uptime sensor."""
     # Opt out of the base-class fingerprint dedup: this sensor's
     # native_value reads from a field that the parent entity's
@@ -123,6 +124,9 @@ class KeeneticMeshUptimeSensor(MeshEntity, SensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     # TOTAL_INCREASING (not MEASUREMENT): mesh node uptime resets to
     # zero on extender reboot. Matches router/PPPoE/WireGuard rationale.
+    # Issue #60: the mws/member fallback feeds this from the same
+    # hotspot rows as client uptime, so it inherits the same jitter —
+    # MonotonicUptimeMixin holds the high-water mark across small dips.
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
     _attr_suggested_display_precision = 0
 
@@ -144,7 +148,7 @@ class KeeneticMeshUptimeSensor(MeshEntity, SensorEntity):
         if node:
             uptime = node.get("uptime")
             if uptime not in (None, "", "unknown", "Unknown"):
-                return safe_int(uptime)
+                return self._clamp_monotonic(safe_int(uptime))
         return None
 
 

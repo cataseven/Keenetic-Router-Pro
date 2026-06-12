@@ -16,6 +16,7 @@ from homeassistant.const import UnitOfTime, UnitOfInformation, UnitOfDataRate, E
 from ..coordinator import KeeneticCoordinator
 from ..entity import ControllerEntity, WanEntity
 from ..utils import safe_float, safe_int
+from .monotonic import MonotonicUptimeMixin
 
 
 class KeeneticWanStatusSensor(ControllerEntity, SensorEntity):
@@ -92,7 +93,7 @@ class KeeneticWanIpSensor(ControllerEntity, SensorEntity):
         }
 
 
-class KeeneticPppoeUptimeSensor(ControllerEntity, SensorEntity):
+class KeeneticPppoeUptimeSensor(ControllerEntity, MonotonicUptimeMixin, SensorEntity):
     """PPPoE connection uptime sensor."""
     _attr_has_entity_name = True
     _attr_translation_key = "pppoe_uptime"
@@ -100,7 +101,8 @@ class KeeneticPppoeUptimeSensor(ControllerEntity, SensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     # TOTAL_INCREASING (not MEASUREMENT): PPPoE uptime is a monotonic
     # counter that resets to zero on every redial. See the rationale
-    # on KeeneticUptimeSensor.
+    # on KeeneticUptimeSensor. Issue #60: MonotonicUptimeMixin shields
+    # the recorder from sub-10% counter dips.
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
     _attr_suggested_display_precision = 0
 
@@ -121,7 +123,7 @@ class KeeneticPppoeUptimeSensor(ControllerEntity, SensorEntity):
         uptime = wan.get("uptime")
         if uptime in (None, "", "unknown", "Unknown"):
             return None
-        return safe_int(uptime)
+        return self._clamp_monotonic(safe_int(uptime))
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
@@ -465,7 +467,7 @@ class KeeneticWanPublicIpSensor(_WanSensorBase):
         }
 
 
-class KeeneticWanUptimeSensor(_WanSensorBase):
+class KeeneticWanUptimeSensor(MonotonicUptimeMixin, _WanSensorBase):
     """Session uptime for the WAN, in seconds."""
     # Opt out of the base-class fingerprint dedup: this sensor's
     # native_value reads from a field that the parent entity's
@@ -476,7 +478,8 @@ class KeeneticWanUptimeSensor(_WanSensorBase):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_device_class = SensorDeviceClass.DURATION
     # TOTAL_INCREASING: same rationale as router/PPPoE uptime — WAN
-    # session uptime resets every time the uplink redials.
+    # session uptime resets every time the uplink redials. Issue #60:
+    # MonotonicUptimeMixin shields the recorder from sub-10% dips.
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
     _attr_suggested_display_precision = 0
 
@@ -500,7 +503,7 @@ class KeeneticWanUptimeSensor(_WanSensorBase):
         up = wan.get("uptime")
         if up in (None, "", "unknown"):
             return None
-        return safe_int(up)
+        return self._clamp_monotonic(safe_int(up))
 
 
 class _WanBytesBase(_WanSensorBase):

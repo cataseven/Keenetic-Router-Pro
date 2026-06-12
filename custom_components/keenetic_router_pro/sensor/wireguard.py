@@ -11,6 +11,7 @@ from homeassistant.const import UnitOfInformation, UnitOfTime, EntityCategory
 from ..coordinator import KeeneticCoordinator
 from ..entity import ControllerEntity
 from ..utils import safe_float, safe_int
+from .monotonic import MonotonicUptimeMixin
 
 
 class _BaseWgSensor(ControllerEntity, SensorEntity):
@@ -39,11 +40,14 @@ class _BaseWgSensor(ControllerEntity, SensorEntity):
         return self._wg_name
 
 
-class KeeneticWgUptimeSensor(_BaseWgSensor):
+class KeeneticWgUptimeSensor(MonotonicUptimeMixin, _BaseWgSensor):
     """WireGuard tunnel uptime sensor."""
     _attr_has_entity_name = True
     # TOTAL_INCREASING (not the MEASUREMENT inherited from _BaseWgSensor):
     # WireGuard tunnel uptime resets on handshake re-establishment.
+    # Issue #60: MonotonicUptimeMixin holds the high-water mark across
+    # sub-10% counter dips so the recorder never logs the
+    # "not strictly increasing" warning.
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
     _attr_suggested_display_precision = 0
 
@@ -67,7 +71,7 @@ class KeeneticWgUptimeSensor(_BaseWgSensor):
                 continue
             parsed = safe_int(value)
             if parsed is not None:
-                return parsed
+                return self._clamp_monotonic(parsed)
         return None
 
 
