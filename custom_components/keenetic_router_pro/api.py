@@ -2731,6 +2731,59 @@ class KeeneticClient:
         except Exception:
             return default
 
+    def _build_partitions(self, partitions_raw: Any) -> List[Dict[str, Any]]:
+        """Normalize a Keenetic ``partition`` block into a flat list.
+
+        Issue #59: a USB drive may have several partitions, but only the
+        first was ever surfaced. Expose every partition so the USB sensor
+        can publish them all as attributes. Handles both the list form
+        (system/usb) and the dict-keyed form (show/media), and tolerates
+        the slightly different field names each endpoint uses
+        (total/size, free/available, fstype/filesystem, ...).
+        """
+        items = []
+        if isinstance(partitions_raw, dict):
+            items = [(k, v) for k, v in partitions_raw.items() if isinstance(v, dict)]
+        elif isinstance(partitions_raw, list):
+            items = [(i, v) for i, v in enumerate(partitions_raw) if isinstance(v, dict)]
+
+        result: List[Dict[str, Any]] = []
+        for key, p in items:
+            total = self._to_int(p.get("total")) or self._to_int(p.get("size"))
+            free_raw = p.get("free")
+            if free_raw is None:
+                free_raw = p.get("available")
+            free = self._to_int(free_raw) if free_raw is not None else None
+            if total and free is not None:
+                used = max(total - free, 0)
+            else:
+                used = self._to_int(p.get("used"))
+            free_val = free if free is not None else 0
+
+            name = (
+                p.get("name")
+                or p.get("label")
+                or (key if isinstance(key, str) else None)
+                or f"part{key}"
+            )
+            percent = round((used / total) * 100, 1) if total > 0 else 0
+
+            result.append({
+                "name": name,
+                "label": p.get("label"),
+                "filesystem": p.get("fstype") or p.get("filesystem") or p.get("fs"),
+                "state": p.get("state") or p.get("status"),
+                "uuid": p.get("uuid"),
+                "total_bytes": total,
+                "used_bytes": used,
+                "free_bytes": free_val,
+                "total_gb": round(total / (1024 ** 3), 2) if total else 0,
+                "used_gb": round(used / (1024 ** 3), 2) if used else 0,
+                "free_gb": round(free_val / (1024 ** 3), 2) if free_val else 0,
+                "percent_used": percent,
+            })
+        return result
+
     def _parse_show_media_device(
         self,
         dev_id: str,
@@ -2753,16 +2806,34 @@ class KeeneticClient:
             if isinstance(first, dict):
                 part0 = first
 
-        total = self._to_int((part0 or {}).get("total")) or self._to_int(media_info.get("size"))
-        # Read free as raw value so None (missing) is distinct from 0 (actually empty).
-        free_raw = (part0 or {}).get("free")
-        free = self._to_int(free_raw) if free_raw is not None else None
-        if total and free is not None:
-            used = max(total - free, 0)
-        else:
-            used = self._to_int((part0 or {}).get("used"))
+        # Issue #59 follow-up: the device-level totals fed the
+        # Total/Used/Free GB sensors from ``part0`` only, so on a
+        # multi-partition drive the sensors showed the first
+        # partition's volume instead of the whole device. Aggregate
+        # across the normalized partition list instead (the same list
+        # we already publish as the ``partitions`` attribute), and
+        # keep the device raw size only as a fallback when the
+        # partition block carries no usable totals.
+        parts = self._build_partitions(partitions)
+        total = sum(p.get("total_bytes") or 0 for p in parts)
+        used = sum(p.get("used_bytes") or 0 for p in parts)
+        free = sum(p.get("free_bytes") or 0 for p in parts)
+        if total == 0:
+            total = self._to_int(media_info.get("size"))
 
-        filesystem = (part0 or {}).get("fstype") or media_info.get("fstype") or media_info.get("filesystem")
+        # A representative filesystem string: every distinct fs on the
+        # stick, in partition order ("ntfs, ext4"), so a mixed drive
+        # isn't mislabeled with just the first partition's fs.
+        fs_seen: List[str] = []
+        for p in parts:
+            fs = p.get("filesystem")
+            if fs and fs not in fs_seen:
+                fs_seen.append(str(fs))
+        filesystem = (
+            ", ".join(fs_seen)
+            if fs_seen
+            else media_info.get("fstype") or media_info.get("filesystem")
+        )
         label = (part0 or {}).get("label") or media_info.get("label") or media_info.get("product") or dev_id
 
         # Enrich from show/usb (port, power-control, etc.)
@@ -2788,7 +2859,7 @@ class KeeneticClient:
             "serial": media_info.get("serial") or (usb_info or {}).get("serial"),
             "total": total,
             "used": used,
-            "free": free if free is not None else 0,
+            "free": free,
             "filesystem": filesystem,
             "state": (part0 or {}).get("state") or media_info.get("state"),
             "type": media_info.get("bus") or "usb",
@@ -2798,6 +2869,8 @@ class KeeneticClient:
             "ejectable": media_info.get("ejectable"),
             "power_control": power_control,
             "uuid": (part0 or {}).get("uuid"),
+            # Issue #59: expose every partition, not just the first.
+            "partitions": parts,
         }
 
     def _parse_usb_device(self, info: Dict[str, Any], fallback_id: str) -> Dict[str, Any] | None:
@@ -2807,26 +2880,23 @@ class KeeneticClient:
 
         # Partition bilgileri
         partitions = info.get("partition") or info.get("partitions") or {}
-        total_size = 0
-        used_size = 0
-        free_size = 0
 
-        part_items: list = []
-        if isinstance(partitions, dict):
-            part_items = [v for v in partitions.values() if isinstance(v, dict)]
-        elif isinstance(partitions, list):
-            part_items = [v for v in partitions if isinstance(v, dict)]
+        # Issue #59 follow-up: aggregate from the same normalized
+        # partition list we publish as the ``partitions`` attribute.
+        # The old hand-rolled loop summed raw ``size``/``used``/``free``
+        # fields: it missed the ``total`` key spelling, couldn't derive
+        # ``used`` when only total+free were reported, and raised
+        # TypeError when the firmware sent the numbers as strings.
+        parts = self._build_partitions(partitions)
+        total_size = sum(p.get("total_bytes") or 0 for p in parts)
+        used_size = sum(p.get("used_bytes") or 0 for p in parts)
+        free_size = sum(p.get("free_bytes") or 0 for p in parts)
 
-        for p in part_items:
-            total_size += p.get("size", 0)
-            used_size += p.get("used", 0)
-            free_size += p.get("free", p.get("available", 0))
-
-        # Partition yoksa üst seviye bilgileri kullan
+        # Partition yoksa / boyut vermiyorsa üst seviye bilgileri kullan
         if total_size == 0:
-            total_size = info.get("size", 0)
-            used_size = info.get("used", 0)
-            free_size = info.get("free", info.get("available", 0))
+            total_size = self._to_int(info.get("size"))
+            used_size = self._to_int(info.get("used"))
+            free_size = self._to_int(info.get("free", info.get("available")))
 
         device_id = info.get("id") or info.get("name") or fallback_id
 
@@ -2842,6 +2912,8 @@ class KeeneticClient:
             "filesystem": info.get("filesystem") or info.get("fs"),
             "state": info.get("state") or info.get("status"),
             "type": info.get("type"),
+            # Issue #59: expose every partition, not just aggregate totals.
+            "partitions": parts,
         }
 
 

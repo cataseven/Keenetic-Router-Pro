@@ -1,8 +1,13 @@
 """Device tracker (presence) for Keenetic Router Pro."""
 from __future__ import annotations
 from typing import Any
-from homeassistant.components.device_tracker.config_entry import ScannerEntity
-from homeassistant.components.device_tracker import SourceType
+# ScannerEntity must come from the package root: the
+# homeassistant.components.device_tracker.config_entry path is a
+# DeprecatedAlias since ~HA 2025.6 and will be removed in HA 2027.6
+# ("The deprecated alias ScannerEntity was used from
+# keenetic_router_pro" log warning). The root export has existed for
+# years, so this stays compatible with older HA cores too.
+from homeassistant.components.device_tracker import ScannerEntity, SourceType
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
