@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import logging
+import random
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -26,6 +28,8 @@ from .const import (
     CONF_PING_INTERVAL,
     DEFAULT_PING_INTERVAL,
     EVENT_NEW_DEVICE,
+    CLOUD_STARTUP_JITTER_PER_ENTRY,
+    CLOUD_STARTUP_JITTER_CAP,
 )
 from .coordinator import KeeneticCoordinator, KeeneticPingCoordinator
 
@@ -97,6 +101,57 @@ def _async_update_insecure_http_issue(
 PLATFORMS: list[str] = ["sensor", "switch", "device_tracker", "button", "binary_sensor", "select", "update", "image", "number"]
 
 
+def _is_cloud_host_entry(entry: ConfigEntry) -> bool:
+    """Cheap cloud-mode test for a config entry (no client construction)."""
+    from .api import is_cloud_keendns_host
+
+    return is_cloud_keendns_host(
+        entry.data.get("host") or entry.data.get("ip") or "",
+        bool(entry.data.get("ssl", DEFAULT_SSL)),
+    )
+
+
+def _cloud_startup_jitter(hass: HomeAssistant, entry: ConfigEntry) -> float:
+    """Seconds to wait before this cloud entry's first poll.
+
+    Issue #43 root cause: on HA restart every configured router fires
+    its first coordinator refresh at virtually the same instant. For
+    cloud-KeenDNS routers that means one synchronised spike of 25-40
+    RCI calls *per router* arriving at Keenetic's proxy from a single
+    WAN IP — read as a brute-force flood, so the proxy drops the auth
+    cookie on every cloud site at once.
+
+    We de-correlate those first polls with a randomised delay scaled by
+    how many *other* cloud entries exist. A lone cloud router waits ~0 s
+    (its own per-request pacing already smooths its single burst); a
+    fleet spreads first polls across a window that grows with the fleet
+    size, capped so startup never stalls unreasonably. Direct-LAN
+    entries always return 0.0.
+    """
+    try:
+        if not _is_cloud_host_entry(entry):
+            return 0.0
+    except Exception:  # noqa: BLE001 — never block setup on detection
+        return 0.0
+
+    # Count *other* cloud entries (this one is already in the registry).
+    sibling_cloud = 0
+    for other in hass.config_entries.async_entries(DOMAIN):
+        if other.entry_id == entry.entry_id:
+            continue
+        try:
+            if _is_cloud_host_entry(other):
+                sibling_cloud += 1
+        except Exception:  # noqa: BLE001
+            continue
+
+    window = min(
+        CLOUD_STARTUP_JITTER_PER_ENTRY * sibling_cloud,
+        CLOUD_STARTUP_JITTER_CAP,
+    )
+    return random.uniform(0.0, window) if window > 0 else 0.0
+
+
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     return True
 
@@ -142,6 +197,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         ) from err
 
     coordinator = KeeneticCoordinator(hass, client)
+
+    # Issue #43: spread cloud routers' first polls so a HA restart
+    # doesn't fire every router's 25-40-call burst at the proxy
+    # simultaneously. No-op (0 s) for direct-LAN entries and for a
+    # lone cloud router.
+    jitter = _cloud_startup_jitter(hass, entry)
+    if jitter > 0:
+        _LOGGER.debug(
+            "Delaying first poll of %s by %.1fs to de-correlate cloud "
+            "router startup (issue #43)",
+            entry.title,
+            jitter,
+        )
+        await asyncio.sleep(jitter)
+
     await coordinator.async_config_entry_first_refresh()
 
     # Plaintext-HTTP Repair card intentionally disabled per user

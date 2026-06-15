@@ -10,7 +10,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import KeeneticClient
-from .const import DOMAIN, FAST_SCAN_INTERVAL, PING_SCAN_INTERVAL, DEFAULT_PING_INTERVAL
+from .const import (
+    DOMAIN,
+    FAST_SCAN_INTERVAL,
+    CLOUD_SCAN_INTERVAL,
+    PING_SCAN_INTERVAL,
+    DEFAULT_PING_INTERVAL,
+)
 
 import logging
 
@@ -30,11 +36,21 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def __init__(self, hass: HomeAssistant, client: KeeneticClient) -> None:
         """Initialize the coordinator."""
+        # Issue #43 follow-up: a cloud-KeenDNS router is polled on a
+        # gentler interval so the steady-state RCI request rate stays
+        # under the hosted proxy's per-source limit. Direct-LAN routers
+        # keep the snappy default. (Burst smoothing within a tick and
+        # transparent 401 re-auth live in the API client.)
+        scan_interval = (
+            CLOUD_SCAN_INTERVAL
+            if getattr(client, "cloud_mode", False)
+            else FAST_SCAN_INTERVAL
+        )
         super().__init__(
             hass,
             _LOGGER,
             name="keenetic_router_pro",
-            update_interval=timedelta(seconds=FAST_SCAN_INTERVAL),
+            update_interval=timedelta(seconds=scan_interval),
         )
         self.client = client
 

@@ -14,12 +14,66 @@ import ipaddress
 import logging
 import re
 
-from .const import DOMAIN
+from .const import (
+    DOMAIN,
+    CLOUD_MAX_CONCURRENCY,
+    LOCAL_MAX_CONCURRENCY,
+    CLOUD_MIN_REQUEST_INTERVAL,
+    KEENDNS_CLOUD_SUFFIXES,
+    LOCAL_HOST_SUFFIXES,
+)
 from .utils import safe_int
 
 _LOGGER = logging.getLogger(f"custom_components.{DOMAIN}.api")
 
 RCI_ROOT = "/rci"
+
+
+def is_cloud_keendns_host(host: str, ssl: bool) -> bool:
+    """Heuristic: is this router reached through KeenDNS *cloud* mode?
+
+    Cloud mode means RCI calls go through Keenetic's hosted reverse
+    proxy — the deployment that enforces the aggressive rate / flood
+    limits behind issue #43. Two signals mark it:
+
+      * the host ends in a known KeenDNS cloud suffix
+        (``*.keenetic.pro`` / ``.link`` / ``.io`` / ``.name``), or
+      * the host is a *public* FQDN reached over HTTPS — i.e. not an IP
+        literal, not a bare hostname, not a ``.local`` / ``.lan`` /
+        home-LAN search domain.
+
+    Direct-to-LAN setups (IP literal, bare hostname, private/loopback
+    name, or HTTPS to a local suffix) return ``False`` and keep the
+    original fast, unthrottled behaviour, so the overwhelmingly common
+    single-LAN-router case is completely unaffected. The fuzzy
+    "public FQDN + HTTPS" branch errs toward enabling the gentle
+    pacing: the cost of a false positive is a few seconds per tick,
+    while a false negative reintroduces the cookie-eviction bug.
+    """
+    candidate = (host or "").strip().lower().strip("[]")
+    if not candidate:
+        return False
+
+    # Known cloud suffix is conclusive regardless of scheme.
+    if candidate.endswith(KEENDNS_CLOUD_SUFFIXES):
+        return True
+
+    # IP literals never go through the cloud proxy (direct / port-forward).
+    try:
+        ipaddress.ip_address(candidate)
+        return False
+    except ValueError:
+        pass
+
+    # Local search domains and bare hostnames are LAN, never cloud.
+    if candidate.endswith(LOCAL_HOST_SUFFIXES):
+        return False
+    if "." not in candidate:
+        return False
+
+    # A dotted, public-looking FQDN reached over HTTPS: treat as cloud
+    # (covers custom-domain KeenDNS and generic remote-HTTPS routers).
+    return bool(ssl)
 
 # Strict allow-list for any value that is interpolated into a
 # Keenetic `/rci/parse` CLI command (interface names, MAC addresses,
@@ -164,6 +218,39 @@ class KeeneticClient:
         self._auth_header: Optional[Dict[str, str]] = None
         self._authenticated: bool = False
 
+        # Issue #43 follow-up — cloud KeenDNS hardening.
+        # ``cloud_mode`` is derived once from host+scheme. When set, RCI
+        # traffic is paced (bounded concurrency + minimum inter-request
+        # spacing) so the burst of 25-40 calls a coordinator tick makes
+        # can't trip the cloud proxy's flood detector. Direct-LAN
+        # clients get a high concurrency cap and zero spacing, i.e. the
+        # original behaviour. ``async_start`` may bump the request
+        # timeout for cloud, since the proxy adds round-trip latency.
+        self.cloud_mode: bool = is_cloud_keendns_host(host, ssl)
+        max_concurrency = (
+            CLOUD_MAX_CONCURRENCY if self.cloud_mode else LOCAL_MAX_CONCURRENCY
+        )
+        self._request_sem: asyncio.Semaphore = asyncio.Semaphore(max_concurrency)
+        self._min_request_interval: float = (
+            CLOUD_MIN_REQUEST_INTERVAL if self.cloud_mode else 0.0
+        )
+        # Guards the "space requests at least N seconds apart" gate.
+        self._pace_lock: asyncio.Lock = asyncio.Lock()
+        self._last_request_monotonic: float = 0.0
+        if self.cloud_mode:
+            # Cloud round-trips are slower; give them more headroom than
+            # the 15 s LAN default so a busy proxy doesn't surface as a
+            # spurious timeout -> UpdateFailed churn.
+            self._request_timeout = max(self._request_timeout, 30)
+            _LOGGER.debug(
+                "Keenetic %s:%s detected as KeenDNS cloud mode — pacing "
+                "RCI calls (max %d in-flight, >=%.0f ms apart)",
+                host,
+                port,
+                max_concurrency,
+                self._min_request_interval * 1000,
+            )
+
         # Capability caches. Each attr starts as ``None`` (unknown), is
         # flipped to ``False`` the first time the corresponding endpoint
         # returns 404 / "not found" (and subsequent ticks skip the call
@@ -200,6 +287,16 @@ class KeeneticClient:
         # forces refresh to happen exactly once per "expired session"
         # event regardless of caller concurrency.
         self._auth_lock: asyncio.Lock = asyncio.Lock()
+
+        # Monotonic counter bumped on every *re*-authentication. A
+        # request captures the generation it was sent under; if it then
+        # gets a 401 and finds the generation has already advanced
+        # (another concurrent caller re-authenticated first), it skips
+        # its own handshake and simply retries with the fresh cookie.
+        # This collapses the "all 25 in-flight calls 401 at once when
+        # the cloud proxy evicts the session" storm into exactly one
+        # re-login. See ``_request`` / ``_reauth_after_401``.
+        self._auth_generation: int = 0
 
 
     def __repr__(self) -> str:
@@ -403,6 +500,29 @@ class KeeneticClient:
             else:
                 await self._async_authenticate()
 
+    async def _reauth_after_401(self, stale_generation: int) -> None:
+        """Re-authenticate after a 401, exactly once across concurrent callers.
+
+        A coordinator tick fans out 25-40 RCI calls. When the cloud
+        proxy evicts the session, every one of them comes back 401 at
+        roughly the same instant. Without coordination each would kick
+        off its own handshake — itself a burst the proxy may again read
+        as abuse. The auth lock serialises them, and the generation
+        check means only the first re-authenticates; the rest observe
+        the bumped generation and return immediately so the caller can
+        retry with the cookie that the winner just refreshed.
+        """
+        async with self._auth_lock:
+            if self._auth_generation != stale_generation:
+                # Someone already refreshed since our request was sent.
+                return
+            self._authenticated = False
+            if self._use_challenge_auth:
+                await self._async_authenticate_challenge()
+            else:
+                await self._async_authenticate()
+            self._auth_generation += 1
+
     async def _request(
         self,
         method: str,
@@ -411,12 +531,30 @@ class KeeneticClient:
         params: Dict[str, Any] | None = None,
         json: Any | None = None,
         allow_text: bool = False,
+        _allow_reauth_retry: bool = True,
     ) -> Any:
-        """Perform a raw HTTP request to Keenetic."""
+        """Perform a raw HTTP request to Keenetic.
+
+        In cloud KeenDNS mode the call is paced: a client-wide semaphore
+        bounds concurrency and a minimum-interval gate spaces calls out,
+        so a tick's worth of requests trickles past the proxy's flood
+        detector instead of arriving as one spike (issue #43). On LAN
+        both are no-ops.
+
+        A 401 is treated as a *transient* session eviction first, not an
+        immediate credential failure: the client re-authenticates once
+        (de-duplicated across concurrent 401s via the auth generation)
+        and retries the call. Only if the retry also 401s do we surface
+        ``KeeneticAuthError`` — so a cloud proxy dropping the cookie no
+        longer forces the user to reconfigure a perfectly valid entry.
+        """
         if self._session is None:
             raise KeeneticApiError("ClientSession is not set")
 
         await self._ensure_auth()
+        # Capture which auth this request rides on, AFTER ensuring auth,
+        # so a concurrent re-auth can be detected on a 401 below.
+        auth_generation = self._auth_generation
 
         url = f"{self._base}{path}"
         headers: Dict[str, str] = dict(self._auth_header or {})
@@ -429,38 +567,73 @@ class KeeneticClient:
             json,
         )
 
-        try:
-            async with async_timeout.timeout(self._request_timeout):
-                resp = await self._session.request(
-                    method,
-                    url,
-                    params=params,
-                    json=json,
-                    headers=headers,
+        # ---- Pacing gate (cloud only) ----------------------------------
+        # Hold a concurrency slot for the whole round-trip, and — for
+        # cloud — additionally ensure consecutive calls are spaced at
+        # least ``_min_request_interval`` apart. The spacing lock is
+        # only held across a short sleep, never across the request.
+        async with self._request_sem:
+            if self._min_request_interval:
+                async with self._pace_lock:
+                    loop = asyncio.get_event_loop()
+                    now = loop.time()
+                    wait = self._min_request_interval - (
+                        now - self._last_request_monotonic
+                    )
+                    if wait > 0:
+                        await asyncio.sleep(wait)
+                    self._last_request_monotonic = loop.time()
+
+            try:
+                async with async_timeout.timeout(self._request_timeout):
+                    resp = await self._session.request(
+                        method,
+                        url,
+                        params=params,
+                        json=json,
+                        headers=headers,
+                    )
+            except aiohttp.ClientError as err:
+                raise KeeneticApiError(f"Connection error: {err}") from err
+
+            # 401: transient session eviction (cloud) or bad credentials.
+            if resp.status == 401:
+                text = await resp.text()
+                self._authenticated = False
+                if _allow_reauth_retry:
+                    _LOGGER.debug(
+                        "Keenetic 401 on %s — re-authenticating and "
+                        "retrying once (likely a transient cloud session "
+                        "drop, not a credential error)",
+                        path,
+                    )
+                    await self._reauth_after_401(auth_generation)
+                    return await self._request(
+                        method,
+                        path,
+                        params=params,
+                        json=json,
+                        allow_text=allow_text,
+                        _allow_reauth_retry=False,
+                    )
+                _LOGGER.error(
+                    "Keenetic auth rejected after re-auth retry: %s", text
                 )
-        except aiohttp.ClientError as err:
-            raise KeeneticApiError(f"Connection error: {err}") from err
+                raise KeeneticAuthError(f"Basic auth rejected: {text}")
 
-        # Basic auth hatalıysa yine 401 alırız
-        if resp.status == 401:
-            text = await resp.text()
-            _LOGGER.error("Keenetic Basic auth rejected: %s", text)
-            self._authenticated = False
-            raise KeeneticAuthError(f"Basic auth rejected: {text}")
+            if resp.status >= 400:
+                text = await resp.text()
+                raise KeeneticApiError(
+                    f"HTTP error {resp.status} for {path}: {text}"
+                )
 
-        if resp.status >= 400:
-            text = await resp.text()
-            raise KeeneticApiError(
-                f"HTTP error {resp.status} for {path}: {text}"
-            )
+            if allow_text:
+                ctype = resp.headers.get("Content-Type", "")
+                if "application/json" in ctype:
+                    return await resp.json()
+                return await resp.text()
 
-        if allow_text:
-            ctype = resp.headers.get("Content-Type", "")
-            if "application/json" in ctype:
-                return await resp.json()
-            return await resp.text()
-
-        return await resp.json()
+            return await resp.json()
 
     async def _rci_get(
         self,
