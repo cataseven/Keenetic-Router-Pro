@@ -91,6 +91,14 @@ class KeeneticUsbStorageSensor(ControllerEntity, SensorEntity):
             "used_gb": round(float(used) / (1024 ** 3), 2),
             "free_gb": round(float(free) / (1024 ** 3), 2),
             "percent_used": percent_used,
+            # Issue #61 (regression of #59): the per-partition breakdown
+            # is produced by the api layer (device["partitions"]) but
+            # was never surfaced here, so the "Partitions" attribute
+            # vanished from the entity in 1.3.5/1.3.6. Re-expose it.
+            # Each item carries label / filesystem / state / uuid and
+            # both byte and GB totals; default to [] so the attribute is
+            # always present (and visibly empty) rather than missing.
+            "partitions": device.get("partitions") or [],
         }
 
 
@@ -178,4 +186,7 @@ class KeeneticMeshUsbStorageSensor(MeshEntity, SensorEntity):
             "used_gb": round(float(used) / (1024 ** 3), 2) if used else 0,
             "free_gb": round(float(free) / (1024 ** 3), 2) if free else 0,
             "percent_used": percent_used,
+            # Issue #61: re-expose the per-partition list on mesh-node
+            # USB sensors too (same regression as the controller sensor).
+            "partitions": device.get("partitions") or [],
         }
