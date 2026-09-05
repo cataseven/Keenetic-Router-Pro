@@ -29,9 +29,9 @@ Before that file is written, the payload is passed through Home
 Assistant's `async_redact_data` helper. The following key categories
 become `**REDACTED**`:
 
-- Credentials: `password`, `username`, `login`, `host`,
+- Credentials and auth material: `password`, `username`, `login`, `host`,
   `authorization`, `cookie`, `set-cookie`, `token`,
-  `x-ndm-challenge`, `x-ndm-realm`
+  `x-ndm-challenge`, `x-ndm-realm`, `x-ndm-data`
 - Network identifiers: `ip`, `ipv4`, `ipv6`, `mac`, `mac_address`,
   `bssid`, `ssid`
 - Wi-Fi PSKs / keys: `psk`, `passphrase`, `pre_shared_key`, `key`,
@@ -53,6 +53,7 @@ redaction.
   credentials into `home-assistant.log`.
 - Sensitive HTTP headers (`Authorization`, `Cookie`) are not logged
   on RCI requests.
+- NDW4 proof/signature payloads and `X-NDM-Data` values are not logged.
 
 ### Command injection
 
@@ -69,9 +70,8 @@ character set on this firmware family.
 
 The router password field uses Home Assistant's password selector,
 which renders as dots in the UI on every config-flow step (initial
-setup, SSDP-discovered confirm, the future re-auth / reconfigure
-flow). This prevents shoulder-surfing and accidental screenshot
-leaks during setup.
+setup, SSDP-discovered confirm, re-auth, and reconfigure flows). This
+prevents shoulder-surfing and accidental screenshot leaks during setup.
 
 ## What this integration **cannot** protect
 
@@ -92,9 +92,9 @@ Practical implications:
   is compromised** and rotate it.
 - If you use plaintext HTTP (`SSL = false`) and your router is not on
   loopback (`127.0.0.1` / `localhost`), your router username, Basic
-  Auth header, NDW2 challenge response, and session cookie traverse
-  the LAN unencrypted on every coordinator poll (every 10 seconds by
-  default). Anyone on the same broadcast domain can capture them.
+  Auth header or interactive-auth traffic (NDW4/NDW2), and session
+  cookie traverse the LAN unencrypted. Anyone on the same broadcast
+  domain can capture them.
 
 ### Recommended hygiene
 
@@ -114,8 +114,8 @@ Practical implications:
   rotating the password if debug logs were collected at the time
   the integration first authenticated.
 - Avoid posting the output of `curl -v https://router/...` publicly
-  — `-v` prints the Authorization header. If you've shared that,
-  rotate the password.
+  — `-v` prints the Authorization header and interactive auth headers.
+  If you've shared that, rotate the password.
 
 ## What changed recently
 
