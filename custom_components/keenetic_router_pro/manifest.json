@@ -8,7 +8,12 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/cataseven/Keenetic-Router-Pro/issues",
   "loggers": ["custom_components.keenetic_api"],
-  "requirements": ["icmplib>=3.0", "pyqrcode>=1.2.1", "pypng>=0.0.20"],
+  "requirements": [
+    "icmplib>=3.0",
+    "pyqrcode>=1.2.1",
+    "pypng>=0.0.20",
+    "argon2-cffi>=23.1.0"
+  ],
   "ssdp": [
     {
       "st": "urn:schemas-upnp-org:device:InternetGatewayDevice:1",
