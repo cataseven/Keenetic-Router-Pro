@@ -7,7 +7,7 @@
   <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 60px !important; width: 217px !important;" >
 </a> 
 
-An advanced Home Assistant integration for Keenetic routers. Provides mesh network management, VPN control, device tracking, traffic monitoring, firmware updates, per-device bandwidth limiting, 4G/LTE data-usage tracking, and more.
+An advanced Home Assistant integration for Keenetic routers and compatible Netcraze devices. Provides mesh network management, VPN control, device tracking, traffic monitoring, firmware updates, per-device bandwidth limiting, 4G/LTE data-usage tracking, and more.
 
 ## 🌟 Features
 
@@ -131,6 +131,14 @@ For each tracked client, two new controls:
 * Mesh node reboot (separate for each node)
 * Clear Bandwidth Limit (per tracked client)
 
+### 🔐 Router Authentication
+
+* **Basic Auth** remains the default path for existing models and configurations.
+* **Interactive Auth** automatically prefers modern `x-ndw4-interactive` when the router advertises it, with `x-ndw2-interactive` retained as a fallback.
+* NDW4 implements the router's three-phase `X-NDM-Data` exchange using **Argon2id**, **SHA3-512/HMAC**, client proof verification, server-signature verification, and a final authenticated `/auth` session check.
+* Session cookies are carried explicitly so interactive authentication also works when the router is addressed by a bare LAN IP (where aiohttp's default safe cookie jar does not retain cookies).
+* Existing configurations keep the same `use_challenge_auth` config key for backward compatibility; only the UI label changes to **Interactive Auth**.
+
 ### 🔒 Security & Privacy *(new)*
 
 * Password fields properly masked (dots, not plain text) in all setup forms
@@ -241,16 +249,16 @@ Settings > Devices & Services > Add Integration > **Keenetic Router Pro**
 
 ### 7. Connection Details
 
-| Field              | Description                                                      | Example       |
-| ------------------ | ---------------------------------------------------------------- | ------------- |
-| Host               | Router IP address                                                | `192.168.1.1` |
-| Port               | Web interface port                                               | `100`         |
-| Username           | Admin username                                                   | `admin`       |
-| Password           | Admin password (masked input)                                    | `********`    |
-| Use Challenge Auth | Enable for newer models (e.g. Hero) that use NDW2 authentication | `off`         |
+| Field                | Description                                                                 | Example       |
+| -------------------- | --------------------------------------------------------------------------- | ------------- |
+| Host                 | Router IP address                                                           | `192.168.1.1` |
+| Port                 | Web interface port                                                          | `100`         |
+| Username             | Admin username                                                              | `admin`       |
+| Password             | Admin password (masked input)                                               | `********`    |
+| Use Interactive Auth | Auto-negotiate interactive auth: prefer NDW4, fall back to NDW2 when needed | `off`         |
 
 > [!NOTE]
-> **Use Challenge Auth** is required for newer Keenetic models such as the **Hero** series that use NDW2 challenge-response authentication instead of Basic Auth. If the integration fails to connect on a newer model, try enabling this option. Older models should leave it disabled.
+> Leave **Interactive Auth** disabled for routers that accept Basic Auth. Enable it when the router requires interactive authentication. The integration will inspect `/auth`, prefer **NDW4** when advertised, and fall back to **NDW2** on compatible older devices. This is required for devices such as **Netcraze Ultra NC-1812** and remains compatible with NDW2-only models such as Keenetic Hero.
 
 ### 8. Select Devices for Tracking and Other Device based managements
 
@@ -492,7 +500,7 @@ automation:
 ## 🔧 Requirements
 
 * Home Assistant 2024.1.0 or newer
-* Keenetic router (NDMS 3.x / 4.x / 5.x)
+* Keenetic router (NDMS 3.x / 4.x / 5.x) or compatible Netcraze device
 * Web management interface must be enabled on the router
 
 ### Tested Models
@@ -503,13 +511,14 @@ automation:
 | Keenetic Hopper (KN-3810) | Basic Auth | |
 | Keenetic Buddy 5 (KN-3311) | Basic Auth | |
 | Keenetic Air (KN-1610) | Basic Auth | |
-| Keenetic Hero (KN-1012) | Challenge Auth (NDW2) | |
+| Keenetic Hero (KN-1012) | Interactive Auth (NDW2) | |
 | Keenetic Titan (KN-1812) | Basic Auth | |
 | Keenetic Giga (KN-1010) | Basic Auth | |
 | Keenetic Runner 4G | Basic Auth | LTE / data-usage features verified |
+| Netcraze Ultra (NC-1812) | Interactive Auth (NDW4) | Verified with the local web-management API |
 
 > [!TIP]
-> Not sure which auth method your router uses? Try **Basic Auth** first (default). If the connection fails, switch to **Challenge Auth**.
+> Not sure which auth method your router uses? Try **Basic Auth** first (default). If the connection fails, enable **Interactive Auth**; the integration will prefer NDW4 and fall back to NDW2 automatically.
 
 ---
 
@@ -520,7 +529,7 @@ automation:
 1. Verify router IP address and port
 2. Verify username and password
 3. Ensure the web interface is enabled on the router
-4. If you have a newer model (e.g. **Hero**), enable **Use Challenge Auth** in the integration settings and try again
+4. If the router advertises interactive authentication (for example **Netcraze Ultra NC-1812** or an NDW2-only Keenetic Hero), enable **Interactive Auth** in the integration settings and try again
 5. If your password changed recently, look for a reauth prompt in **Settings → Devices & Services** instead of removing the integration
 
 ### Entities Not Appearing
