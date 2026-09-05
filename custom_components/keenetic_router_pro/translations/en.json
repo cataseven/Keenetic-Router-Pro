@@ -10,7 +10,7 @@
           "username": "Username",
           "password": "Password",
           "ssl": "Use SSL",
-          "use_challenge_auth": "Use Challenge Auth (NDW2, required for newer models like Hero)"
+          "use_challenge_auth": "Use Interactive Auth (Auto: NDW4 → NDW2)"
         }
       },
       "select_clients": {
@@ -38,7 +38,7 @@
           "username": "Username",
           "password": "Password",
           "ssl": "Use SSL",
-          "use_challenge_auth": "Use Challenge Auth (NDW2)"
+          "use_challenge_auth": "Use Interactive Auth (Auto: NDW4 → NDW2)"
         }
       }
     },
@@ -209,7 +209,7 @@
   "issues": {
     "insecure_http": {
       "title": "Plaintext HTTP connection to {title}",
-      "description": "The Keenetic Router Pro integration is configured to connect to {host} over plaintext HTTP (SSL disabled). On every poll, the router username, the NDW2 challenge response (or Basic Auth header) and the session cookie traverse your LAN unencrypted. Anyone on the same broadcast domain can capture them.\n\nTo fix:\n1. Enable HTTPS on the router admin UI (System Settings → Web Configurator → enable HTTPS).\n2. Reconfigure this integration with SSL enabled (Settings → Devices & Services → Keenetic Router Pro → Configure).\n3. If the new HTTPS port differs from the old one, update it too.\n\nLoopback hosts (127.0.0.1 / localhost) and SSH-tunneled targets do not trigger this warning. See SECURITY.md for the full threat model."
+      "description": "The Keenetic Router Pro integration is configured to connect to {host} over plaintext HTTP (SSL disabled). On every poll, the router username, the Basic Auth header (or interactive-auth exchange) and the session cookie traverse your LAN unencrypted. Anyone on the same broadcast domain can capture them.\n\nTo fix:\n1. Enable HTTPS on the router admin UI (System Settings → Web Configurator → enable HTTPS).\n2. Reconfigure this integration with SSL enabled (Settings → Devices & Services → Keenetic Router Pro → Configure).\n3. If the new HTTPS port differs from the old one, update it too.\n\nLoopback hosts (127.0.0.1 / localhost) and SSH-tunneled targets do not trigger this warning. See SECURITY.md for the full threat model."
     }
   }
 }
