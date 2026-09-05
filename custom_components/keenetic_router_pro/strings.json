@@ -10,7 +10,7 @@
           "username": "Username",
           "password": "Password",
           "ssl": "Use SSL",
-          "use_challenge_auth": "Use Challenge Auth (NDW2, required for newer models like Hero)"
+          "use_challenge_auth": "Use Interactive Auth (Auto: NDW4 → NDW2)"
         }
       },
       "select_clients": {
