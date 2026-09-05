@@ -33,7 +33,8 @@ _PASSWORD_SELECTOR = selector.TextSelector(
     selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
 )
 
-from .api import KeeneticClient, KeeneticAuthError, KeeneticApiError
+from .api import KeeneticAuthError, KeeneticApiError
+from .interactive_client import KeeneticClient
 from .const import (
     DOMAIN,
     DEFAULT_PORT,

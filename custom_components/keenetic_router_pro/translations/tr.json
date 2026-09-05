@@ -10,7 +10,7 @@
           "username": "Kullanıcı Adı",
           "password": "Şifre",
           "ssl": "SSL Kullan",
-          "use_challenge_auth": "Challenge Auth Kullan (NDW2, Hero gibi yeni modeller için gerekli)"
+          "use_challenge_auth": "Etkileşimli Kimlik Doğrulama (Otomatik: NDW4 → NDW2)"
         }
       },
       "select_clients": {
@@ -38,7 +38,7 @@
           "username": "Kullanıcı adı",
           "password": "Şifre",
           "ssl": "SSL Kullan",
-          "use_challenge_auth": "Challenge Auth Kullan (NDW2)"
+          "use_challenge_auth": "Etkileşimli Kimlik Doğrulama (Otomatik: NDW4 → NDW2)"
         }
       }
     },
@@ -209,7 +209,7 @@
   "issues": {
     "insecure_http": {
       "title": "{title} için şifrelenmemiş HTTP bağlantısı",
-      "description": "Keenetic Router Pro entegrasyonu {host} adresine düz HTTP üzerinden (SSL kapalı) bağlanıyor. Her sorgulamada router kullanıcı adı, NDW2 challenge yanıtı (veya Basic Auth header'ı) ve oturum çerezi LAN'da şifrelenmemiş olarak iletiliyor. Aynı broadcast alandaki herkes bunları yakalayabilir.\n\nÇözüm:\n1. Router yönetim arayüzünde HTTPS'i etkinleştirin (Sistem Ayarları → Web Konfigüratör → HTTPS'i etkinleştir).\n2. Bu entegrasyonu SSL açık şekilde yeniden yapılandırın (Ayarlar → Cihazlar ve Servisler → Keenetic Router Pro → Yapılandır).\n3. Yeni HTTPS portu eskisinden farklı ise onu da güncelleyin.\n\nLoopback adresleri (127.0.0.1 / localhost) ve SSH tüneli üzerinden gelen hedefler bu uyarıyı tetiklemez. Tam tehdit modeli için SECURITY.md belgesine bakın."
+      "description": "Keenetic Router Pro entegrasyonu {host} adresine düz HTTP üzerinden (SSL kapalı) bağlanıyor. Her sorgulamada router kullanıcı adı, Basic Auth header'ı (veya etkileşimli kimlik doğrulama trafiği) ve oturum çerezi LAN'da şifrelenmemiş olarak iletiliyor. Aynı broadcast alandaki herkes bunları yakalayabilir.\n\nÇözüm:\n1. Router yönetim arayüzünde HTTPS'i etkinleştirin (Sistem Ayarları → Web Konfigüratör → HTTPS'i etkinleştir).\n2. Bu entegrasyonu SSL açık şekilde yeniden yapılandırın (Ayarlar → Cihazlar ve Servisler → Keenetic Router Pro → Yapılandır).\n3. Yeni HTTPS portu eskisinden farklı ise onu da güncelleyin.\n\nLoopback adresleri (127.0.0.1 / localhost) ve SSH tüneli üzerinden gelen hedefler bu uyarıyı tetiklemez. Tam tehdit modeli için SECURITY.md belgesine bakın."
     }
   }
 }

@@ -15,7 +15,8 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .api import KeeneticClient, KeeneticAuthError, KeeneticApiError
+from .api import KeeneticAuthError, KeeneticApiError
+from .interactive_client import KeeneticClient
 from .const import (
     DOMAIN,
     DEFAULT_PORT,
@@ -70,11 +71,11 @@ def _async_update_insecure_http_issue(
     """Raise / clear the plaintext-HTTP Repair card for one config entry.
 
     When SSL is disabled and the router is not on loopback, every
-    coordinator poll sends the Basic Auth header (or the NDW2
-    challenge response + session cookie) across the LAN in plaintext.
-    Anyone on the same broadcast domain can capture it. The Repair
-    card surfaces that explicitly with a learn-more link to SECURITY.md
-    so the operator knows what's at stake and how to fix it.
+    coordinator poll sends the Basic Auth header (or the interactive-auth
+    session cookie) across the LAN in plaintext. Anyone on the same
+    broadcast domain can capture it. The Repair card surfaces that
+    explicitly with a learn-more link to SECURITY.md so the operator knows
+    what's at stake and how to fix it.
 
     Called on every setup_entry — if the user reconfigures to HTTPS
     the same call deletes the issue, so no manual dismissal needed.
