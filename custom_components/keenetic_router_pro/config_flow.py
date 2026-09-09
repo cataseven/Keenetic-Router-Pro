@@ -190,6 +190,14 @@ class KeeneticRouterProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 await self.async_set_unique_id(unique_id)
                 self._abort_if_unique_id_configured()
 
+                # Issue #64: async_start may have fallen back from Basic to
+                # the challenge handshake (KeeneticOS 5.x rejects Basic on
+                # the web port). Persist whichever scheme actually
+                # authenticated, so later restarts go straight to it
+                # instead of repeating the failing Basic attempt — and so
+                # the checkbox in the UI reflects reality.
+                user_input[CONF_USE_CHALLENGE_AUTH] = client.use_challenge_auth
+
                 self._user_input = user_input
                 self._title = f"{vendor} {device}"
                 self._client = client
@@ -362,6 +370,11 @@ class KeeneticRouterProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 use_challenge_auth=candidate.get(CONF_USE_CHALLENGE_AUTH, False),
             )
             await client.async_start(session)
+            # Issue #64: record the scheme that actually authenticated —
+            # async_start falls back from Basic to the challenge
+            # handshake on KeeneticOS 5.x. Callers persist this so the
+            # entry stops retrying a scheme the router refuses.
+            candidate[CONF_USE_CHALLENGE_AUTH] = client.use_challenge_auth
             return None
         except KeeneticAuthError as err:
             _LOGGER.debug("Auth test failed: %s", err)
@@ -424,6 +437,9 @@ class KeeneticRouterProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     data_updates={
                         CONF_USERNAME: user_input[CONF_USERNAME],
                         CONF_PASSWORD: user_input[CONF_PASSWORD],
+                        CONF_USE_CHALLENGE_AUTH: candidate[
+                            CONF_USE_CHALLENGE_AUTH
+                        ],
                     },
                 )
             errors["base"] = err
@@ -507,9 +523,13 @@ class KeeneticRouterProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_USERNAME: user_input[CONF_USERNAME],
                         CONF_PASSWORD: user_input[CONF_PASSWORD],
                         CONF_SSL: user_input[CONF_SSL],
-                        CONF_USE_CHALLENGE_AUTH: user_input.get(
-                            CONF_USE_CHALLENGE_AUTH, False
-                        ),
+                        # Not user_input: _async_try_connect writes back
+                        # the scheme that actually authenticated, which
+                        # differs when Basic was refused and the client
+                        # fell back to the challenge handshake (#64).
+                        CONF_USE_CHALLENGE_AUTH: candidate[
+                            CONF_USE_CHALLENGE_AUTH
+                        ],
                     },
                 )
             errors["base"] = err

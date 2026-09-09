@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Any
 
@@ -53,6 +54,10 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             update_interval=timedelta(seconds=scan_interval),
         )
         self.client = client
+        # Issue #69: device registry id of the router device. Written by
+        # async_setup_entry before platforms are forwarded, so every
+        # sub-device entity can link itself with ``via_device_id``.
+        self.main_device_id: str | None = None
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch all router data with bounded, staged parallelism.
@@ -74,9 +79,31 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         sem = asyncio.Semaphore(4)
  
-        async def _bounded(coro):
+        async def _bounded(
+            func: Callable[..., Awaitable[Any]], *args: Any, **kwargs: Any
+        ) -> Any:
+            """Run one fetch with at most 4 RCI calls in flight.
+
+            ``func`` is a callable (normally a bound KeeneticClient
+            method), never an already-created coroutine: the coroutine
+            object is only produced once the semaphore has been
+            acquired.
+
+            Issue #65: the previous form ``_bounded(client.async_x())``
+            built every coroutine eagerly while gather's argument list
+            was evaluated. Wrappers parked on the semaphore (14 of the
+            18 stage-1 calls) had not reached ``await coro`` yet, so a
+            cancelled tick — HA restart, config entry reload, unload —
+            destroyed them at the ``async with`` line and the untouched
+            coroutines raised "coroutine ... was never awaited" when
+            garbage collected. Creating the coroutine inside the
+            semaphore leaves nothing to leak.
+
+            Never pass a pre-built awaitable here; pass the callable
+            plus its arguments so binding happens at call time.
+            """
             async with sem:
-                return await coro
+                return await func(*args, **kwargs)
  
         # Collected per-tick so we can emit a single warning instead of
         # silently defaulting every failing fetch at debug level.
@@ -123,41 +150,41 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             lte_data_usage,
             lte_sim_slots,
         ) = await asyncio.gather(
-            _bounded(self.client.async_get_system_info()),
-            _bounded(self.client.async_get_current_version_info()),
-            _bounded(self.client.async_get_available_version_info()),
-            _bounded(self.client.async_get_interfaces()),
-            _bounded(self.client.async_get_clients()),
-            _bounded(self.client.async_get_mesh_nodes()),
-            _bounded(self.client.async_get_client_stats()),
-            _bounded(self.client.async_get_host_policies()),
+            _bounded(self.client.async_get_system_info),
+            _bounded(self.client.async_get_current_version_info),
+            _bounded(self.client.async_get_available_version_info),
+            _bounded(self.client.async_get_interfaces),
+            _bounded(self.client.async_get_clients),
+            _bounded(self.client.async_get_mesh_nodes),
+            _bounded(self.client.async_get_client_stats),
+            _bounded(self.client.async_get_host_policies),
             # Sprint 11 (issue #42) — per-host bandwidth limits.
             # Best-effort fetch: routers without the ``traffic-shape``
             # component installed return an empty dict via the
             # capability cache and never get polled again.
-            _bounded(self.client.async_get_traffic_shapes()),
-            _bounded(self.client.async_get_ndns_info()),
-            _bounded(self.client.async_get_usb_storage()),
-            _bounded(self.client.async_get_all_interface_stats()),
-            _bounded(self.client.async_get_ping_check_status()),
-            _bounded(self.client.async_get_crypto_maps()),
+            _bounded(self.client.async_get_traffic_shapes),
+            _bounded(self.client.async_get_ndns_info),
+            _bounded(self.client.async_get_usb_storage),
+            _bounded(self.client.async_get_all_interface_stats),
+            _bounded(self.client.async_get_ping_check_status),
+            _bounded(self.client.async_get_crypto_maps),
             # New in Sprint 4 — DNS proxy + IPsec VICI log diagnostics.
             # Both fetches are best-effort and silent: routers without
             # DoH support / IPsec component return empty dicts, the
             # capability cache stops them being polled again, and
             # absent endpoints must not produce per-tick warnings.
-            _bounded(self.client.async_get_dns_proxy_status()),
-            _bounded(self.client.async_get_ipsec_diagnostics()),
+            _bounded(self.client.async_get_dns_proxy_status),
+            _bounded(self.client.async_get_ipsec_diagnostics),
             # Sprint 12 (issue #47) — LTE data-usage / monthly quota
             # for cellular WANs. Silent fetch: routers without a
             # cellular interface return {} and never get re-polled
             # once the capability cache fires.
-            _bounded(self.client.async_get_lte_data_usage()),
+            _bounded(self.client.async_get_lte_data_usage),
             # Sprint 13 (issue #51) — current SIM slot per cellular
             # interface, sourced from the *running config* endpoint
             # (NOT the status one — same field name, different meaning).
             # Silent fetch: routers without an LTE/USB modem return {}.
-            _bounded(self.client.async_get_lte_sim_slots()),
+            _bounded(self.client.async_get_lte_sim_slots),
             return_exceptions=True,
         )
  
@@ -228,23 +255,31 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             traffic_stats,
             port_info,
         ) = await asyncio.gather(
-            _bounded(self.client.async_get_wifi_networks(interfaces=interfaces)),
-            _bounded(self.client.async_get_wireguard_status(interfaces=interfaces)),
-            _bounded(self.client.async_get_vpn_tunnels(interfaces=interfaces)),
-            _bounded(self.client.async_get_wan_status(interfaces=interfaces)),
-            _bounded(self.client.async_get_wan_interfaces(interfaces=interfaces)),
-            _bounded(self.client.async_get_traffic_stats(interfaces=interfaces)),
-            _bounded(self.client.async_get_port_info(interfaces=interfaces)),
+            _bounded(self.client.async_get_wifi_networks, interfaces=interfaces),
+            _bounded(self.client.async_get_wireguard_status, interfaces=interfaces),
+            _bounded(self.client.async_get_vpn_tunnels, interfaces=interfaces),
+            _bounded(self.client.async_get_wan_status, interfaces=interfaces),
+            _bounded(self.client.async_get_wan_interfaces, interfaces=interfaces),
+            _bounded(self.client.async_get_traffic_stats, interfaces=interfaces),
+            _bounded(self.client.async_get_port_info, interfaces=interfaces),
             return_exceptions=True,
         )
  
         wifi = _ok("wifi", wifi, [])
-        wireguard = _ok("wireguard", wireguard, [])
-        vpn_tunnels = _ok("vpn_tunnels", vpn_tunnels, [])
+        # Defaults must match the shape the api layer returns, not just
+        # "something empty": async_get_wireguard_status and
+        # async_get_vpn_tunnels both return {"profiles": {...}}, and the
+        # consumers call .get("profiles") on them. Falling back to a list
+        # here made a single failed fetch raise "'list' object has no
+        # attribute 'get'" in switch.py's setup, taking the whole switch
+        # platform down instead of degrading to "no tunnels".
+        wireguard = _ok("wireguard", wireguard, {"profiles": {}})
+        vpn_tunnels = _ok("vpn_tunnels", vpn_tunnels, {"profiles": {}})
         wan_status = _ok("wan_status", wan_status, {})
         wan_interfaces = _ok("wan_interfaces", wan_interfaces, [])
         traffic_stats = _ok("traffic_stats", traffic_stats, {})
-        port_info = _ok("port_info", port_info, {})
+        # async_get_port_info returns a list of port dicts.
+        port_info = _ok("port_info", port_info, [])
 
         # Emit a single aggregated warning per tick for any non-critical
         # fetches that fell back to defaults. Keeping this above debug
@@ -278,7 +313,7 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if missing_pw_targets:
             pw_results = await asyncio.gather(
                 *(
-                    _bounded(self.client.async_get_wifi_password(iface_id))
+                    _bounded(self.client.async_get_wifi_password, iface_id)
                     for iface_id, _ssid in missing_pw_targets
                 ),
                 return_exceptions=True,
@@ -321,7 +356,7 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         mesh_usb: list[dict[str, Any]] = []
         if connected_nodes:
             node_usb_results = await asyncio.gather(
-                *(_bounded(_fetch_node_usb(n)) for n in connected_nodes),
+                *(_bounded(_fetch_node_usb, n) for n in connected_nodes),
                 return_exceptions=True,
             )
             for res in node_usb_results:

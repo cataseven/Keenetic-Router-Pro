@@ -572,19 +572,41 @@ class _LteQuotaBinaryBase(WanEntity, BinarySensorEntity):
     """
     _attr_has_entity_name = True
 
+    def __init__(
+        self,
+        coordinator: KeeneticCoordinator,
+        entry: ConfigEntry,
+        wan_id: str,
+    ) -> None:
+        WanEntity.__init__(self, coordinator, entry.entry_id, entry.title, wan_id)
+
     def _usage(self) -> dict:
+        """Quota dict for this WAN, blanked when the counter is off.
+
+        Mirrors the sensor side (issue #63): a disabled counter is a
+        valid router state, not a broken data source, so ``is_on``
+        returns None and these read "unknown". Previously they went
+        "unavailable" — two red rows sitting next to six "unknown"
+        ones on the same device card.
+        """
         data = self.coordinator.data or {}
         m = data.get("lte_data_usage") or {}
         if not isinstance(m, dict):
             return {}
-        return m.get(self._wan_id, {}) or {}
+        usage = m.get(self._wan_id, {}) or {}
+        if not usage.get("enabled", False):
+            return {}
+        return usage
 
     @property
     def available(self) -> bool:
-        if self._wan is None:
+        # The super() check stops these reporting a stale ON from old
+        # coordinator data while the router is unreachable — on a
+        # PROBLEM device class that reads as a live "quota exceeded"
+        # alarm. Same guard the sibling WAN binary sensors use.
+        if not super().available:
             return False
-        usage = self._usage()
-        return bool(usage) and usage.get("enabled", False)
+        return self._wan is not None
 
 
 class KeeneticLteLimitExceededSensor(_LteQuotaBinaryBase):

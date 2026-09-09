@@ -22,7 +22,7 @@ from .const import (
     KEENDNS_CLOUD_SUFFIXES,
     LOCAL_HOST_SUFFIXES,
 )
-from .utils import safe_int
+from .utils import format_host_for_url, safe_int
 
 _LOGGER = logging.getLogger(f"custom_components.{DOMAIN}.api")
 
@@ -88,6 +88,12 @@ def is_cloud_keendns_host(host: str, ssl: bool) -> bool:
 #   * policy names — "Policy0", user-defined "Smart Home" (no spaces -> rename)
 #   * crypto maps  — "TEST", "SITE-TO-SITE_HQ"
 _CLI_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.:/\-]+$")
+
+# How long to stop probing the LTE traffic-counter endpoint after every
+# cellular interface answered 404. Long enough that an unsupported
+# firmware costs ~2 requests an hour, short enough that switching the
+# quota on in the router UI takes effect without restarting HA.
+_TRAFFIC_COUNTER_RETRY_SECONDS = 1800.0
 
 
 def _data_usage_to_gb(value: Any, unit: str) -> Optional[float]:
@@ -197,21 +203,30 @@ class KeeneticClient:
         self._ssl = ssl
         self._request_timeout = request_timeout
         self._use_challenge_auth = use_challenge_auth
+        # Issue #64: KeeneticOS 5.2 (release note NDM-4515, "upgraded the
+        # system authentication method for the HTTP suite") rejects Basic
+        # auth on the web port. A 401 there is not proof of a bad
+        # password, so the first one triggers one automatic retry with the
+        # challenge handshake. The flag keeps that retry to exactly once
+        # per client, so a genuinely wrong password can't loop.
+        self._basic_fallback_tried: bool = False
 
         scheme = "https" if ssl else "http"
         # Bracket IPv6 literals so the URL is valid (#57). A bare
         # ``http://2a00:...:4ee2:100/`` is ambiguous — yarl/aiohttp cannot
         # tell the address colons from the port separator. Hostnames, IPv4,
         # and already-bracketed values pass through unchanged.
-        host_part = host
-        try:
-            if isinstance(host, str) and isinstance(
-                ipaddress.ip_address(host), ipaddress.IPv6Address
-            ):
-                host_part = f"[{host}]"
-        except ValueError:
-            # Not a bare IP literal (hostname / KeenDNS / already bracketed).
-            pass
+        # Shared with the device-URL builders so both normalise the same
+        # way (hostnames and IPv4 untouched). ``or host`` keeps a
+        # malformed value as-is rather than blanking the base URL, so
+        # the resulting connection error still names it.
+        #
+        # Note this also strips an IPv6 zone id from the *connection*
+        # target, not just from displayed URLs: ``fe80::1%eth0`` becomes
+        # ``[fe80::1]``. Accepted, because yarl cannot carry a zone
+        # through an authority anyway and reaching a router over a
+        # link-local address is not a supported setup.
+        host_part = format_host_for_url(host) or host
         self._base = f"{scheme}://{host_part}:{port}"
 
         self._session: Optional[aiohttp.ClientSession] = None
@@ -317,6 +332,16 @@ class KeeneticClient:
     __str__ = __repr__
 
 
+    @property
+    def use_challenge_auth(self) -> bool:
+        """Whether the challenge (NDW2) handshake is the active scheme.
+
+        Reads back as ``True`` after an automatic Basic-to-challenge
+        fallback, so the config flow can persist the scheme that
+        actually worked instead of making the user find the checkbox.
+        """
+        return self._use_challenge_auth
+
     async def async_start(self, session: aiohttp.ClientSession) -> None:
         """Attach an aiohttp session and authenticate."""
         self._session = session
@@ -343,6 +368,27 @@ class KeeneticClient:
                 resp = await self._session.get(url, headers=headers)
         except aiohttp.ClientError as err:
             raise KeeneticAuthError(f"Auth connection failed: {err}") from err
+
+        # Issue #64. KeeneticOS 5.x hardened HTTP auth and rejects Basic
+        # on the web port, so a 401 here says "wrong scheme" at least as
+        # often as "wrong password" — the router still advertises the
+        # interactive handshake on /auth. Retry once with NDW2 before
+        # telling the user their credentials are invalid; if that
+        # handshake also fails it raises its own, more specific error.
+        if resp.status == 401 and not self._basic_fallback_tried:
+            self._basic_fallback_tried = True
+            _LOGGER.info(
+                "Basic auth rejected by %s:%s (HTTP 401) — retrying with "
+                "the challenge (NDW2) handshake, which KeeneticOS 5.x "
+                "requires",
+                self._host,
+                self._port,
+            )
+            await self._async_authenticate_challenge()
+            # Remember the scheme that worked so re-auth after a later
+            # 401 goes straight down the challenge path.
+            self._use_challenge_auth = True
+            return
 
         if resp.status != 200:
             text = await resp.text()
@@ -616,10 +662,18 @@ class KeeneticClient:
                         allow_text=allow_text,
                         _allow_reauth_retry=False,
                     )
-                _LOGGER.error(
-                    "Keenetic auth rejected after re-auth retry: %s", text
+                # Name the scheme actually in use: after the #64 fallback
+                # this client may be on the challenge handshake, and a
+                # message blaming "Basic" sends users down the wrong path.
+                scheme_name = (
+                    "Challenge (NDW2)" if self._use_challenge_auth else "Basic"
                 )
-                raise KeeneticAuthError(f"Basic auth rejected: {text}")
+                _LOGGER.error(
+                    "Keenetic auth rejected after re-auth retry (%s): %s",
+                    scheme_name,
+                    text,
+                )
+                raise KeeneticAuthError(f"{scheme_name} auth rejected: {text}")
 
             if resp.status >= 400:
                 text = await resp.text()
@@ -1028,14 +1082,49 @@ class KeeneticClient:
                     _LOGGER.debug("WiFi password found via Method 4 for %s", interface_id)
                     return psk
 
-            # Also try matching by SSID across all interfaces
-            for iface_id, iface in interfaces.items():
-                if not isinstance(iface, dict):
-                    continue
-                psk = _extract_psk(iface)
-                if psk:
-                    _LOGGER.debug("WiFi password found via SSID scan in interface %s", iface_id)
-                    return psk
+            # Also try a sibling interface that broadcasts the SAME SSID:
+            # a dual-band network stores one PSK per AP interface, so the
+            # 5 GHz twin is a legitimate source for the 2.4 GHz entry.
+            #
+            # The SSID check is the whole point. This loop used to accept
+            # the first PSK found on *any* interface, which handed the
+            # main network's password to the guest AP — producing a QR
+            # code that scans cleanly and then fails to connect, which is
+            # worse than no password at all (issue #63).
+            target = interfaces.get(interface_id)
+            target_ssid = (
+                str(target.get("ssid") or "").strip()
+                if isinstance(target, dict)
+                else ""
+            )
+            target_group = (
+                str(target.get("group") or "").strip()
+                if isinstance(target, dict)
+                else ""
+            )
+            if target_ssid:
+                for iface_id, iface in interfaces.items():
+                    if iface_id == interface_id or not isinstance(iface, dict):
+                        continue
+                    if str(iface.get("ssid") or "").strip() != target_ssid:
+                        continue
+                    # Same SSID is not enough on its own: a guest network
+                    # deliberately given the main network's SSID (captive
+                    # portal setups do this) would otherwise inherit the
+                    # main PSK — the exact bug this block was fixing, just
+                    # at smaller scale. Bridge membership separates them.
+                    iface_group = str(iface.get("group") or "").strip()
+                    if target_group and iface_group and iface_group != target_group:
+                        continue
+                    psk = _extract_psk(iface)
+                    if psk:
+                        _LOGGER.debug(
+                            "WiFi password for %s taken from same-SSID "
+                            "sibling %s",
+                            interface_id,
+                            iface_id,
+                        )
+                        return psk
         except Exception as err:
             _LOGGER.debug("WiFi password Method 4 failed for %s: %s", interface_id, err)
 
@@ -1109,7 +1198,10 @@ class KeeneticClient:
         # We require at least 2 methods to have actually reported
         # missing — a single network blip during one method shouldn't
         # be enough to blacklist a real interface, and the in-memory
-        # Method 4 is intentionally excluded from the count.
+        # Method 4 is intentionally excluded from the count: it reuses the
+        # shared `show/interface` payload rather than probing a
+        # per-interface path, so its failure says nothing about whether
+        # this interface exists on the router.
         if (
             network_methods_attempted >= 2
             and network_methods_missing == network_methods_attempted
@@ -2579,11 +2671,12 @@ class KeeneticClient:
         """
         devices: List[Dict[str, Any]] = []
 
-        if not self._session or not self._auth_header or not node_ip:
+        safe_node_host = format_host_for_url(node_ip)
+        if not self._session or not self._auth_header or not safe_node_host:
             return devices
 
         scheme = "https" if self._ssl else "http"
-        url = f"{scheme}://{node_ip}:{self._port}{RCI_ROOT}/system/usb"
+        url = f"{scheme}://{safe_node_host}:{self._port}{RCI_ROOT}/system/usb"
 
         try:
             async with async_timeout.timeout(self._request_timeout):
@@ -3451,7 +3544,14 @@ class KeeneticClient:
         downstream sensors always speak a single unit, regardless of
         whether the router was set to display in MB, GB or TB.
         """
-        if getattr(self, "_traffic_counter_supported", True) is False:
+        # A firmware that lacks this endpoint and a router where the user
+        # simply hasn't switched the counter on both answer 404, so
+        # "unsupported" can only ever be a guess. Back off for a while
+        # rather than latching the feature off for the lifetime of the
+        # client — otherwise enabling the quota in the router UI does
+        # nothing until Home Assistant restarts (issue #63).
+        retry_after = getattr(self, "_traffic_counter_retry_after", 0.0)
+        if retry_after and asyncio.get_event_loop().time() < retry_after:
             return {}
 
         # Locate cellular interfaces. We prefer the trait list because
@@ -3525,7 +3625,11 @@ class KeeneticClient:
             unit = str(data.get("unit") or "GB").upper()
             normalised: Dict[str, Any] = {
                 "interface_id": iface_id,
-                "enabled": bool(data.get("enabled")),
+                # Some firmwares send the JSON string "false" here, which
+                # bool() would happily call True — and the quota sensors
+                # gate everything on this flag.
+                "enabled": str(data.get("enabled", "")).strip().lower()
+                not in ("", "false", "no", "0", "off", "none"),
                 "raw_unit": unit,
                 # All "amount" fields converted to GB so sensors share
                 # a single unit. None passes through as None.
@@ -3549,10 +3653,14 @@ class KeeneticClient:
         # implement this endpoint at all — cache the capability away
         # so we stop polling on every coordinator tick.
         if not any_endpoint_seen and lte_ids:
-            self._traffic_counter_supported = False
+            self._traffic_counter_retry_after = (
+                asyncio.get_event_loop().time()
+                + _TRAFFIC_COUNTER_RETRY_SECONDS
+            )
             _LOGGER.debug(
-                "show/interface/traffic-counter endpoint missing on this "
-                "firmware — caching as unsupported"
+                "show/interface/traffic-counter answered for no cellular "
+                "interface — backing off %.0f s before probing again",
+                _TRAFFIC_COUNTER_RETRY_SECONDS,
             )
 
         return results
@@ -3765,7 +3873,8 @@ class KeeneticClient:
             node_ip: IP address of the mesh node.
             node_name: Display name for logging.
         """
-        if not self._session or not node_ip:
+        safe_node_host = format_host_for_url(node_ip)
+        if not self._session or not safe_node_host:
             raise HomeAssistantError("Cannot connect to mesh node")
 
         label = node_name or node_ip
@@ -3777,7 +3886,7 @@ class KeeneticClient:
             ports_to_try.append(80)
 
         for port in ports_to_try:
-            base = f"{scheme}://{node_ip}:{port}"
+            base = f"{scheme}://{safe_node_host}:{port}"
 
             # Always do challenge auth with mesh nodes
             node_headers = await self._authenticate_to_node(node_ip, port)
@@ -3911,8 +4020,12 @@ class KeeneticClient:
         if port is None:
             port = self._port
 
+        safe_node_host = format_host_for_url(node_ip)
+        if not safe_node_host:
+            return None
+
         scheme = "https" if self._ssl else "http"
-        auth_url = f"{scheme}://{node_ip}:{port}/auth"
+        auth_url = f"{scheme}://{safe_node_host}:{port}/auth"
 
         try:
             # Step 1: GET /auth to get challenge

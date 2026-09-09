@@ -11,6 +11,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -260,6 +261,45 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.warning(
                 "Initial ping refresh failed (non-fatal), will retry on next cycle: %s", err
             )
+
+    # Issue #64: async_start may have fallen back from Basic to the
+    # challenge handshake. The config flow persists that for new and
+    # reconfigured entries, but an entry created before this fix would
+    # otherwise repeat the doomed Basic 401 round-trip on every restart.
+    # Writing it here is safe: the update listener that reloads the entry
+    # on change is only registered at the very end of setup, so this
+    # cannot re-enter.
+    if client.use_challenge_auth != bool(
+        entry.data.get(CONF_USE_CHALLENGE_AUTH, False)
+    ):
+        _LOGGER.info(
+            "Persisting challenge auth on the config entry — the router "
+            "refused Basic auth"
+        )
+        hass.config_entries.async_update_entry(
+            entry,
+            data={
+                **entry.data,
+                CONF_USE_CHALLENGE_AUTH: client.use_challenge_auth,
+            },
+        )
+
+    # Issue #69: DeviceInfo["via_device"] is deprecated (removed in HA
+    # 2027.8.0) in favour of DeviceInfo["via_device_id"], which needs a
+    # real device registry id rather than an identifier tuple. Create the
+    # router device here — before platforms are forwarded — so every
+    # sub-device (mesh node, WAN, crypto map, tracked client) can link to
+    # it no matter which platform HA sets up first. ControllerEntity
+    # enriches this same identifier with model / firmware /
+    # configuration_url moments later.
+    device_reg = dr.async_get(hass)
+    main_device = device_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, entry.entry_id)},
+        manufacturer="Keenetic",
+        name=entry.title,
+    )
+    coordinator.main_device_id = main_device.id
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {

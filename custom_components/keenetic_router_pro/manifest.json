@@ -7,7 +7,7 @@
   "documentation": "https://github.com/cataseven/Keenetic-Router-Pro",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/cataseven/Keenetic-Router-Pro/issues",
-  "loggers": ["custom_components.keenetic_api"],
+  "loggers": ["custom_components.keenetic_router_pro"],
   "requirements": ["icmplib>=3.0", "pyqrcode>=1.2.1", "pypng>=0.0.20"],
   "ssdp": [
     {
@@ -19,5 +19,5 @@
       "manufacturer": "ZyXEL Communications Corp."
     }
   ],
-  "version": "1.3.7"
+  "version": "1.3.9"
 }

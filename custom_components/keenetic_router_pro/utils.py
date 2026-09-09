@@ -1,7 +1,82 @@
 """Utilities for Keenetic Router Pro integration."""
+import inspect
+import ipaddress
 import math
 from typing import Any, Dict, Optional
+
+from homeassistant.helpers import device_registry as dr
+
 from .const import DOMAIN
+
+
+def format_host_for_url(host: Optional[str]) -> Optional[str]:
+    """Return ``host`` ready for embedding in a URL, or ``None``.
+
+    Bare IPv6 literals must be wrapped in brackets per RFC 3986 —
+    otherwise the colons parse as a port separator and HA's device
+    registry rejects the ``configuration_url`` with "port can't be
+    converted to integer", aborting entity setup (issue #62).
+
+    Hostnames, IPv4 literals and already-bracketed hosts pass through
+    unchanged. A host that contains colons but is *not* a parseable
+    IPv6 literal can never form a valid URL authority, so ``None`` is
+    returned — callers must then omit the URL entirely rather than
+    crash the platform. Zone ids (``fe80::1%eth0``) are dropped from
+    the URL form: RFC 6874 requires ``%25`` encoding that common URL
+    parsers reject anyway, and a zone id is meaningless outside the
+    router's own link.
+    """
+    if not host:
+        return None
+    candidate = str(host).strip()
+    if not candidate:
+        return None
+    if candidate.startswith("["):
+        return candidate
+    if ":" not in candidate:
+        return candidate
+    addr = candidate.split("%", 1)[0]
+    try:
+        if ipaddress.ip_address(addr).version == 6:
+            return f"[{addr}]"
+    except ValueError:
+        pass
+    return None
+
+
+# Issue #69. HA 2026.9 replaced DeviceInfo["via_device"] (an identifier
+# tuple) with DeviceInfo["via_device_id"] (a device registry id string).
+# The old key still works but logs "calls `device_registry.
+# async_get_or_create` with a deprecated `via_device` parameter" and
+# stops working in HA 2027.8.0.
+#
+# Older cores do NOT accept via_device_id: entity_platform splats the
+# DeviceInfo dict straight into async_get_or_create, so an unknown
+# keyword raises TypeError and the device is never created. Feature
+# detection beats parsing __version__ because it survives backports.
+try:
+    _SUPPORTS_VIA_DEVICE_ID: bool = "via_device_id" in inspect.signature(
+        dr.DeviceRegistry.async_get_or_create
+    ).parameters
+except (AttributeError, TypeError, ValueError):  # pragma: no cover
+    _SUPPORTS_VIA_DEVICE_ID = False
+
+
+def _via_device_kwargs(
+    entry_id: str,
+    via_device_id: Optional[str],
+) -> Dict[str, Any]:
+    """Return the DeviceInfo key that links a sub-device to the router.
+
+    Passing both keys at once raises HomeAssistantError on modern
+    cores, so exactly one of them is emitted. When the router's device
+    id isn't known yet the key is omitted entirely rather than set to
+    ``None``: an absent key leaves an already-stored link untouched,
+    while ``None`` would clear it.
+    """
+    if _SUPPORTS_VIA_DEVICE_ID:
+        return {"via_device_id": via_device_id} if via_device_id else {}
+    return {"via_device": (DOMAIN, entry_id)}
 
 
 def safe_float(value: Any) -> Optional[float]:
@@ -61,9 +136,9 @@ def clamp_percent(value: Any) -> Optional[float]:
 
 
 def get_main_device_info(
-        title: str, 
-        entry_id: str, 
-        firmware_version: str, 
+        title: str,
+        entry_id: str,
+        firmware_version: str,
         model: str,
         host: str,
         ssl: bool = False,
@@ -77,7 +152,8 @@ def get_main_device_info(
         clean_domain = ndns_domain.replace("https://", "").replace("http://", "").split("/")[0]
         configuration_url = f"{scheme}://{clean_domain}"
     else:
-        configuration_url = f"{scheme}://{host}"
+        safe_host = format_host_for_url(host)
+        configuration_url = f"{scheme}://{safe_host}" if safe_host else None
 
     return {
         "identifiers": {(DOMAIN, entry_id)},
@@ -96,7 +172,8 @@ def get_mesh_device_info(
     node_cid: Optional[str] = None,
     host: Optional[str] = None,
     ssl: bool = False,
-    fqdn: str = None
+    fqdn: str = None,
+    via_device_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Device info для Mesh-ноды (связано с главным роутером)."""
     if node and node_cid:
@@ -108,7 +185,8 @@ def get_mesh_device_info(
             configuration_url = f"{scheme}://{fqdn}"
         else:
             scheme = "https" if ssl else "http"
-            configuration_url = f"{scheme}://{node_ip}" if node_ip else None
+            safe_ip = format_host_for_url(node_ip)
+            configuration_url = f"{scheme}://{safe_ip}" if safe_ip else None
 
         return {
             "identifiers": {(DOMAIN, f"mesh_{node_cid}")},
@@ -116,32 +194,17 @@ def get_mesh_device_info(
             "manufacturer": "Keenetic",
             "model": node.get("model") or "Extender",
             "sw_version": node.get("firmware"),
-            "via_device": (DOMAIN, entry_id),
+            **_via_device_kwargs(entry_id, via_device_id),
             "configuration_url": configuration_url,
         }
-    
-    # Fallback к главному устройству
-    return get_main_device_info(title, entry_id, None, None, host, ssl)
 
+    # Fallback: attach to the router device without redefining it.
+    # Returning a full main-device dict here would push model
+    # "Controller" and a null firmware / configuration_url into the
+    # registry, overwriting the real values — entity_platform splats
+    # whatever device_info returns straight into async_get_or_create.
+    return {"identifiers": {(DOMAIN, entry_id)}}
 
-def get_mesh_usb_device_info(
-    title: str,
-    entry_id: str,
-    mesh_node_name: str,
-    mesh_cid: Optional[str] = None,
-    node_ip: Optional[str] = None,
-    ssl: bool = False,
-) -> Dict[str, Any]:
-    """Device info для USB на Mesh-ноде."""
-    if mesh_cid:
-        return {
-            "identifiers": {(DOMAIN, f"mesh_{mesh_cid}")},
-            "name": mesh_node_name,
-            "manufacturer": "Keenetic",
-            "via_device": (DOMAIN, entry_id),
-        }
-    # Fallback к главному устройству
-    return get_main_device_info(title, entry_id, None, None, node_ip, ssl)
 
 def get_wan_device_info(
     title: str,
@@ -150,6 +213,7 @@ def get_wan_device_info(
     description: Optional[str] = None,
     iface_type: Optional[str] = None,
     role_label: Optional[str] = None,
+    via_device_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Device info for a single WAN interface.
 
@@ -170,7 +234,7 @@ def get_wan_device_info(
         "name": f"{title} — {device_name}",
         "manufacturer": "Keenetic",
         "model": f"WAN ({iface_type})" if iface_type else "WAN",
-        "via_device": (DOMAIN, entry_id),
+        **_via_device_kwargs(entry_id, via_device_id),
     }
 
 
@@ -179,6 +243,7 @@ def get_crypto_map_device_info(
     entry_id: str,
     cmap_name: str,
     remote_peer: Optional[str] = None,
+    via_device_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Device info for a single site-to-site IPsec `crypto map` tunnel.
 
@@ -203,7 +268,7 @@ def get_crypto_map_device_info(
         "name": f"{title} — IPsec {device_name}",
         "manufacturer": "Keenetic",
         "model": "IPsec site-to-site tunnel",
-        "via_device": (DOMAIN, entry_id),
+        **_via_device_kwargs(entry_id, via_device_id),
     }
 
 
@@ -213,9 +278,10 @@ def get_client_device_info(
     label: str,
     client: Optional[Dict[str, Any]] = None,
     initial_ip: Optional[str] = None,
+    via_device_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Device info для отслеживаемого клиента как отдельного устройства."""
-    
+
     device_name = label
     manufacturer = None
     model = None
@@ -232,17 +298,18 @@ def get_client_device_info(
 
             if ssdp.get("model"):
                 model = ssdp.get("model")
-    
+
     ip_address = initial_ip
     if client and client.get("ip"):
         ip_address = client.get("ip")
-    
+
+    safe_ip = format_host_for_url(ip_address)
     return {
         "identifiers": {(DOMAIN, f"client_{mac.replace(':', '_')}")},
         "name": device_name,
         "manufacturer": manufacturer,
         "model": model,
-        "via_device": (DOMAIN, entry_id),
-        "configuration_url": f"http://{ip_address}" if ip_address else None,
+        **_via_device_kwargs(entry_id, via_device_id),
+        "configuration_url": f"http://{safe_ip}" if safe_ip else None,
         "connections": {("mac", mac.upper())},
     }

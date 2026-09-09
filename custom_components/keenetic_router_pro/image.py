@@ -22,6 +22,22 @@ from .coordinator import KeeneticCoordinator
 _LOGGER = logging.getLogger(__name__)
 
 
+def _qr_escape(value: str) -> str:
+    """Escape a value for the ``WIFI:`` URI scheme.
+
+    Backslash, semicolon, comma, colon and double quote are separators
+    in that format. An SSID or PSK containing one of them produces a QR
+    that a phone parses into the wrong fields — it scans fine and then
+    fails to join, which is far more confusing than a visibly broken
+    code. The scheme escapes them with a backslash; the backslash
+    itself has to be escaped first.
+    """
+    out = str(value)
+    for ch in ("\\", ";", ",", ":", '"'):
+        out = out.replace(ch, f"\\{ch}")
+    return out
+
+
 def _is_guest_wifi(network: dict[str, Any]) -> bool:
     """Return True if the given Wi-Fi network looks like a guest network."""
     ssid = str(network.get("ssid") or "").lower()
@@ -340,18 +356,16 @@ class KeeneticQrWiFiImageEntity(CoordinatorEntity[KeeneticCoordinator], ImageEnt
         return None
 
     def _get_device_info(self) -> dict[str, Any]:
-        """Get device info for the entity."""
-        system_info = self.coordinator.data.get("system", {})
-        host = getattr(self.coordinator.client, "_host", "unknown")
+        """Attach the QR entity to the router device — identifiers only.
 
-        return {
-            "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": "Keenetic Router",
-            "manufacturer": "Keenetic",
-            "model": system_info.get("model", "Router"),
-            "sw_version": system_info.get("title", system_info.get("release")),
-            "configuration_url": f"http://{host}",
-        }
+        ControllerEntity owns this device's metadata (name, model,
+        firmware, and the configuration_url with its https / KeenDNS
+        variants). Repeating a partial copy here meant whichever
+        platform registered last won: the QR entity would rename the
+        device to "Keenetic Router" and replace an https:// or KeenDNS
+        URL with a hardcoded http:// one.
+        """
+        return {"identifiers": {(DOMAIN, self._entry.entry_id)}}
 
     async def async_image(self) -> bytes | None:
         """Return bytes of image.
@@ -408,13 +422,16 @@ class KeeneticQrWiFiImageEntity(CoordinatorEntity[KeeneticCoordinator], ImageEnt
                 password = self._get_password_from_interfaces()
 
             if password:
-                qr_string = f"WIFI:S:{ssid};T:WPA;P:{password};;"
+                qr_string = (
+                    f"WIFI:S:{_qr_escape(ssid)};T:WPA;"
+                    f"P:{_qr_escape(password)};;"
+                )
                 _LOGGER.debug(
                     "Generating QR code with password for %s network: %s",
                     self._network_type, ssid,
                 )
             else:
-                qr_string = f"WIFI:S:{ssid};T:nopass;;;"
+                qr_string = f"WIFI:S:{_qr_escape(ssid)};T:nopass;;;"
                 _LOGGER.debug(
                     "Generating QR code without password for %s network: %s",
                     self._network_type, ssid,

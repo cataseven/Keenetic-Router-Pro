@@ -67,6 +67,17 @@ class _FingerprintedCoordinatorEntity(CoordinatorEntity):
         """Return the dict to fingerprint, or None to bypass dedup."""
         return None
 
+    @property
+    def _main_device_id(self) -> Optional[str]:
+        """Device registry id of the router this sub-device hangs off.
+
+        Issue #69: sub-devices link to the router by registry id
+        (``via_device_id``), not by identifier tuple. ``getattr`` keeps
+        this safe against a coordinator built by an older test fixture
+        that predates the attribute.
+        """
+        return getattr(self.coordinator, "main_device_id", None)
+
     @callback
     def _handle_coordinator_update(self) -> None:
         source = self._fingerprint_source
@@ -155,8 +166,8 @@ class ControllerEntity(CoordinatorEntity):
             self._entry_id,
             self._firmware_version,
             self._model_name,
-            host=self.coordinator._client._host if hasattr(self.coordinator, '_client') else None,
-            ssl=self.coordinator._client._ssl if hasattr(self.coordinator, '_client') else False,
+            host=getattr(self.coordinator.client, "_host", None),
+            ssl=getattr(self.coordinator.client, "_ssl", False),
             ndns_domain=ndns_domain,
         )
 
@@ -228,8 +239,9 @@ class MeshEntity(_FingerprintedCoordinatorEntity):
             self._node,
             self._node_cid,
             host=node_ip,
-            ssl=self.coordinator._client._ssl if hasattr(self.coordinator, '_client') else False,
-            fqdn=node.get("fqdn")
+            ssl=getattr(self.coordinator.client, "_ssl", False),
+            fqdn=node.get("fqdn") if node else None,
+            via_device_id=self._main_device_id,
         )
     
 class WanEntity(_FingerprintedCoordinatorEntity):
@@ -296,6 +308,7 @@ class WanEntity(_FingerprintedCoordinatorEntity):
             description=wan.get("description"),
             iface_type=wan.get("type"),
             role_label=wan.get("role_label"),
+            via_device_id=self._main_device_id,
         )
 
 
@@ -364,6 +377,7 @@ class CryptoMapEntity(_FingerprintedCoordinatorEntity):
             entry_id=self._entry_id,
             cmap_name=self._cmap_name,
             remote_peer=cmap.get("remote_peer"),
+            via_device_id=self._main_device_id,
         )
 
 
@@ -439,6 +453,7 @@ class ClientEntity(_FingerprintedCoordinatorEntity):
             label=self._label,
             client=client,
             initial_ip=self._initial_ip,
+            via_device_id=self._main_device_id,
         )
     
     @property
