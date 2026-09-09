@@ -125,6 +125,11 @@ from .lte import (
     KeeneticLteTemperatureSensor,
     KeeneticLteConnectionStateSensor,
     KeeneticLteApnSensor,
+    # Carrier aggregation + serving cell (issue #63)
+    KeeneticLteCarrierAggregationSensor,
+    KeeneticLteCarrierCountSensor,
+    KeeneticLteAggregatedBandwidthSensor,
+    KeeneticLteCellSensor,
 )
 
 
@@ -303,6 +308,13 @@ async def async_setup_entry(
             KeeneticLteTemperatureSensor(coordinator, entry, wan_id),
             KeeneticLteConnectionStateSensor(coordinator, entry, wan_id),
             KeeneticLteApnSensor(coordinator, entry, wan_id),
+            # Carrier aggregation (issue #63). Parsed from the same
+            # `show interface` payload the other LTE sensors read, so
+            # this adds no extra router request.
+            KeeneticLteCarrierAggregationSensor(coordinator, entry, wan_id),
+            KeeneticLteCarrierCountSensor(coordinator, entry, wan_id),
+            KeeneticLteAggregatedBandwidthSensor(coordinator, entry, wan_id),
+            KeeneticLteCellSensor(coordinator, entry, wan_id),
         ]
 
     def _wan_sensor_set(wan_id: str, wan_dict: dict | None = None) -> list[SensorEntity]:
