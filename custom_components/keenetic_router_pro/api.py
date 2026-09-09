@@ -3508,6 +3508,23 @@ class KeeneticClient:
         await self._rci_parse(cmd)
         await self._rci_parse("system configuration save")
 
+    async def async_wake_client(self, mac: str) -> None:
+        """Send a Wake-on-LAN magic packet to a client via ``ip hotspot wake``.
+
+        This mirrors the "Wake on LAN" button in the Keenetic web UI / My.Keenetic
+        app, which is implemented on the router side by the CLI command
+        ``ip hotspot wake {mac}`` (introduced in NDMS 2.08). It's a one-shot
+        action, not a config change, so unlike async_set_client_bandwidth /
+        async_set_client_policy there is no following "system configuration
+        save" — nothing is persisted to the running config.
+        """
+        mac_clean = mac.lower().replace("-", ":")
+        safe_mac = _validate_cli_arg(mac_clean, "client mac")
+
+        cmd = f"ip hotspot wake {safe_mac}"
+        _LOGGER.debug("Sending Wake-on-LAN packet to client %s", mac_clean)
+        await self._rci_parse(cmd)
+
     async def async_get_lte_data_usage(self) -> Dict[str, Dict[str, Any]]:
         """Get traffic-counter (data usage / monthly quota) for LTE WANs.
 

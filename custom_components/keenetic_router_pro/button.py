@@ -58,6 +58,16 @@ async def async_setup_entry(
                 initial_ip=initial_ip,
             )
         )
+        entities.append(
+            KeeneticClientWakeOnLanButton(
+                coordinator=coordinator,
+                entry=entry,
+                api_client=client,
+                mac=mac,
+                label=name,
+                initial_ip=initial_ip,
+            )
+        )
 
     async_add_entities(entities)
 
@@ -170,3 +180,55 @@ class KeeneticClientClearBandwidthButton(ClientEntity, ButtonEntity):
             )
             raise
         await self.coordinator.async_request_refresh()
+
+class KeeneticClientWakeOnLanButton(ClientEntity, ButtonEntity):
+    """One-tap Wake-on-LAN button per tracked client.
+
+    Mirrors the "Wake on LAN" action available for a client in the Keenetic
+    web UI / My.Keenetic app, sending a magic packet to the client's MAC
+    address via the router's ``ip hotspot wake`` CLI command.
+    """
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:power"
+
+    # Per-client buttons share the client device card with the slider;
+    # they don't read coordinator data themselves, so the fingerprint
+    # dedup machinery doesn't apply.
+    _FINGERPRINT_IGNORE: frozenset = frozenset()
+
+    def __init__(
+        self,
+        coordinator: KeeneticCoordinator,
+        entry: ConfigEntry,
+        api_client: KeeneticClient,
+        mac: str,
+        label: str,
+        initial_ip: str | None,
+    ) -> None:
+        ClientEntity.__init__(
+            self,
+            coordinator=coordinator,
+            entry_id=entry.entry_id,
+            title=entry.title,
+            mac=mac,
+            label=label,
+            initial_ip=initial_ip,
+        )
+        self._api_client = api_client
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._entry_id}_client_{self._mac}_wol"
+
+    @property
+    def name(self) -> str:
+        return "Wake on LAN"
+
+    async def async_press(self, **_: Any) -> None:
+        try:
+            await self._api_client.async_wake_client(self._mac)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception(
+                "Failed to send Wake-on-LAN packet to client %s", self._mac
+            )
+            raise
