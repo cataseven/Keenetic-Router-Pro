@@ -133,7 +133,6 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         (
             system,
             version,
-            version_available,
             interfaces,
             clients,
             mesh_nodes,
@@ -152,7 +151,6 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ) = await asyncio.gather(
             _bounded(self.client.async_get_system_info),
             _bounded(self.client.async_get_current_version_info),
-            _bounded(self.client.async_get_available_version_info),
             _bounded(self.client.async_get_interfaces),
             _bounded(self.client.async_get_clients),
             _bounded(self.client.async_get_mesh_nodes),
@@ -190,7 +188,6 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
  
         system = _ok("system_info", system, {})
         version = _ok("current_version", version, {})
-        version_available = _ok("available_version", version_available, {})
         interfaces = _ok("interfaces", interfaces, [])
         clients = _ok("clients", clients, [])
         mesh_nodes = _ok("mesh_nodes", mesh_nodes, [])
@@ -235,6 +232,17 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(f"Critical router fetch failed ({details})")
  
         merged_system = {**system, **version}
+        # Asked after stage 1 because the answer is tied to the firmware
+        # running now. Mostly served from the client's hourly cache, so
+        # this costs a request about once an hour.
+        version_available = await self.client.async_get_available_version_info(
+            merged_system.get("title") or merged_system.get("release")
+        )
+        # False until the router has answered once for this firmware;
+        # the update entity then reports "unknown" rather than
+        # "up to date" (which would make HA drop a skipped update).
+        merged_system["fw-update-known"] = version_available is not None
+        version_available = version_available or {}
         merged_system["release-available"] = (
             version_available.get("title") or version_available.get("release")
         )

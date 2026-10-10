@@ -86,6 +86,11 @@ class KeeneticFirmwareUpdate(ControllerEntity, UpdateEntity):
     def latest_version(self) -> str | None:
         """Return the latest available firmware version."""
         system = self.coordinator.data.get("system", {}) or {}
+        if not system.get("fw-update-known", True):
+            # No update check has succeeded for this firmware yet. Say
+            # "unknown": answering with the installed version would make
+            # Home Assistant forget an update the user chose to skip.
+            return None
         available = system.get("fw-available") or system.get("release-available")
         current = system.get("title") or system.get("release")
 
@@ -225,6 +230,7 @@ class KeeneticFirmwareUpdate(ControllerEntity, UpdateEntity):
             self.async_write_ha_state()
 
         # Refresh coordinator to pick up new version
+        self._client.invalidate_firmware_check()
         await self.coordinator.async_request_refresh()
 
 

@@ -96,6 +96,12 @@ _CLI_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.:/\-]+$")
 # quota on in the router UI takes effect without restarting HA.
 _TRAFFIC_COUNTER_RETRY_SECONDS = 1800.0
 
+# How often to ask the router whether new firmware is out, and how soon
+# to ask again after the question failed. Firmware releases are rare;
+# there is no reason to ask on every 10-second poll.
+_FIRMWARE_CHECK_SECONDS = 3600.0
+_FIRMWARE_CHECK_RETRY_SECONDS = 120.0
+
 
 def _data_usage_to_gb(value: Any, unit: str) -> Optional[float]:
     """Convert a traffic-counter amount to GB.
@@ -325,6 +331,13 @@ class KeeneticClient:
         # log errors per non-existent AP — pavlozelinskyi observed
         # 3,900 errors in 1.5 hours from this single bug.
         self._missing_interface_paths: set[str] = set()
+
+        # Last successful firmware update check, the firmware it was made
+        # for, and when to ask the router again. See
+        # ``async_get_available_version_info``.
+        self._fw_check: Dict[str, Any] | None = None
+        self._fw_check_firmware: str | None = None
+        self._fw_check_next: float = 0.0
 
         # Serialise auth refreshes. The coordinator's stage-1 fan-out
         # fires 13 RCI calls in parallel; if the session expires between
@@ -949,10 +962,49 @@ class KeeneticClient:
         data = await self._rci_get("show/version")
         return data or {}
 
-    async def async_get_available_version_info(self) -> Dict[str, Any]:
-        """Return version info"""
-        data = await self._rci_get("components/check-update")
-        return data or {}
+    async def async_get_available_version_info(
+        self, installed_version: str | None = None
+    ) -> Dict[str, Any] | None:
+        """The router's answer to "is newer firmware available?".
+
+        ``components/check-update`` is asked at most hourly; in between,
+        and whenever asking fails, the last answer is returned. None
+        means there is no answer to give: no check has succeeded yet, or
+        the firmware has changed since the last one (``installed_version``
+        is the firmware the router reports now).
+
+        A failed check must never read as "no update". Home Assistant
+        forgets a skipped update the moment the reported latest version
+        changes, so a single failed poll used to bring a dismissed
+        firmware update straight back.
+        """
+        loop = asyncio.get_event_loop()
+        if installed_version and installed_version != self._fw_check_firmware:
+            # First poll, or the firmware changed since the last answer
+            # (updated here or in the router's web UI): that answer is
+            # about other firmware, so forget it and ask now.
+            self._fw_check = None
+            self._fw_check_firmware = installed_version
+            self._fw_check_next = 0.0
+        if loop.time() < self._fw_check_next:
+            return self._fw_check
+
+        try:
+            data = await self._rci_get("components/check-update")
+        except Exception as err:  # noqa: BLE001
+            self._fw_check_next = loop.time() + _FIRMWARE_CHECK_RETRY_SECONDS
+            _LOGGER.debug(
+                "Firmware update check failed, keeping the last answer: %s", err
+            )
+            return self._fw_check
+
+        self._fw_check = data if isinstance(data, dict) else {}
+        self._fw_check_next = loop.time() + _FIRMWARE_CHECK_SECONDS
+        return self._fw_check
+
+    def invalidate_firmware_check(self) -> None:
+        """Ask the router for firmware updates again on the next poll."""
+        self._fw_check_next = 0.0
 
     async def async_get_port_info(self, interfaces: Dict[str, Any] | None = None) -> List[Dict[str, Any]]:
         """Return physical port information for the main router.
