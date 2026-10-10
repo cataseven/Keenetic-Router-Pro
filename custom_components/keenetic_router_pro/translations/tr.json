@@ -10,7 +10,7 @@
           "username": "Kullanıcı Adı",
           "password": "Şifre",
           "ssl": "SSL Kullan",
-          "use_challenge_auth": "Challenge Auth Kullan (NDW2, Hero gibi yeni modeller için gerekli)"
+          "use_challenge_auth": "Challenge Auth Kullan (NDW2/NDW4, Hero gibi yeni modeller ve KeeneticOS 5.2 için gerekli)"
         }
       },
       "select_clients": {
@@ -38,12 +38,13 @@
           "username": "Kullanıcı adı",
           "password": "Şifre",
           "ssl": "SSL Kullan",
-          "use_challenge_auth": "Challenge Auth Kullan (NDW2)"
+          "use_challenge_auth": "Challenge Auth Kullan (NDW2/NDW4)"
         }
       }
     },
     "error": {
       "invalid_auth": "Geçersiz kimlik bilgileri",
+      "ndw4_unsupported": "Router yeni KeeneticOS 5.2 oturum açma yöntemini (NDW4) istiyor ve bu tamamlanamadı. Parolanız büyük olasılıkla doğru — lütfen debug kaydını açıp GitHub issue #71’e bildirin.",
       "cannot_connect": "Router'a bağlanılamıyor",
       "unknown": "Bilinmeyen hata oluştu"
     },

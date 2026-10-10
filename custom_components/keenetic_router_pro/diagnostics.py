@@ -7,7 +7,7 @@ MAC addresses, SSIDs, pre-shared keys, NDW2 challenge headers, or any
 other piece of router state that would let a reader compromise the
 device or trivially identify the operator.
 
-The redaction strategy is two-layered:
+The redaction strategy is three-layered:
 
 1. ``async_redact_data`` from Home Assistant walks the payload and
    replaces any value whose key matches the ``TO_REDACT`` set with
@@ -18,6 +18,9 @@ The redaction strategy is two-layered:
    coordinator indexes whose **keys** are MAC addresses. HA's redactor
    only scrubs values, so MAC-keyed indexes need their own pass or
    the MACs leak through the keys themselves.
+
+3. ``_mask_wifi_passwords`` masks the cached Wi-Fi PSKs, which sit
+   under keys that no ``TO_REDACT`` entry can match.
 """
 
 from __future__ import annotations
@@ -38,9 +41,10 @@ from .const import (
 
 
 # Keys whose values must NEVER appear in a diagnostics dump.
-# Matching is case-insensitive (HA's redactor lower-cases keys before
-# comparison), so both ``ssid`` and ``SSID`` are caught by the
-# lowercase entry.
+# Matching is EXACT and case-sensitive — HA's redactor does a plain
+# ``key in to_redact`` with no lower-casing — so a key that merely
+# contains a sensitive word ("wifi_passwords") is NOT covered by its
+# entry here ("password"). Such containers need their own pass below.
 TO_REDACT: set[str] = {
     # Credentials / session
     CONF_PASSWORD,
@@ -56,6 +60,19 @@ TO_REDACT: set[str] = {
     "authorization",
     "x-ndm-challenge",
     "x-ndm-realm",
+    # Auth handshake material (NDW2 / NDW4 / 5.2 access tokens). None of
+    # it is in the payload today; listed so a future change that stores
+    # handshake state on the coordinator can't leak it by accident.
+    "www-authenticate",
+    "x-ndm-data",
+    "x-ndma-tkn",
+    "challenge",
+    "session_id",
+    "session_cookie",
+    "nonce",
+    "salt",
+    "proof",
+    "signature",
     # Network identifiers
     "ip",
     "ip_address",
@@ -65,6 +82,17 @@ TO_REDACT: set[str] = {
     "mac_address",
     "bssid",
     "ssid",
+    # Keenetic payloads carry IPs under these keys too — including the
+    # public WAN address ("address" on the uplink interface).
+    "address",
+    "gateway",
+    "remote",
+    "remote_peer",
+    "local_endpoint",
+    "remote_endpoint",
+    "remote-endpoint-address",
+    "local-endpoint-address",
+    "ac-mac",
     # Wi-Fi PSKs / keys
     "psk",
     "passphrase",
@@ -110,6 +138,28 @@ def _strip_mac_keyed_indexes(data: Any) -> Any:
     return stripped
 
 
+def _mask_wifi_passwords(data: Any) -> Any:
+    """Return a copy of coordinator data with Wi-Fi PSKs masked.
+
+    ``wifi_passwords`` maps interface id -> PSK. Neither that key nor
+    the interface ids match anything in ``TO_REDACT`` (matching is
+    exact), so without this pass every network's password went into the
+    dump in plain text. Non-empty values become ``**REDACTED**``; the ""
+    not-found sentinel is kept, which still shows a developer which APs
+    had a key — the one thing QR-code bug reports need.
+    """
+    if not isinstance(data, dict):
+        return data
+    passwords = data.get("wifi_passwords")
+    if not isinstance(passwords, dict):
+        return data
+    masked = dict(data)
+    masked["wifi_passwords"] = {
+        iface: ("**REDACTED**" if pw else "") for iface, pw in passwords.items()
+    }
+    return masked
+
+
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> dict[str, Any]:
@@ -127,7 +177,9 @@ async def async_get_config_entry_diagnostics(
 
     coordinator_data: Any = None
     if coordinator is not None:
-        coordinator_data = _strip_mac_keyed_indexes(getattr(coordinator, "data", None))
+        coordinator_data = _mask_wifi_passwords(
+            _strip_mac_keyed_indexes(getattr(coordinator, "data", None))
+        )
 
     ping_data: Any = None
     if ping_coordinator is not None:

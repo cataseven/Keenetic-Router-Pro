@@ -22,6 +22,7 @@ from .const import (
     KEENDNS_CLOUD_SUFFIXES,
     LOCAL_HOST_SUFFIXES,
 )
+from . import ndw4
 from .utils import format_host_for_url, safe_int
 
 _LOGGER = logging.getLogger(f"custom_components.{DOMAIN}.api")
@@ -176,12 +177,42 @@ def _is_endpoint_missing(err: BaseException) -> bool:
     return False
 
 
+def _auth_scheme_names(headers: Any) -> List[str]:
+    """Return only the scheme names advertised in WWW-Authenticate.
+
+    Safe to log, which the raw header is not: everything after the
+    scheme name (challenge nonce, session id, cookie name) is dropped.
+    The scheme list is the one fact worth having for support — whether
+    a firmware offers NDW2, NDW4 or both.
+    """
+    if not headers:
+        return []
+    try:
+        values = headers.getall("WWW-Authenticate", [])
+    except AttributeError:
+        value = headers.get("WWW-Authenticate")
+        values = [value] if value else []
+    return [str(v).split(None, 1)[0] for v in values if v and str(v).strip()]
+
+
 class KeeneticApiError(Exception):
     """Base API error."""
 
 
 class KeeneticAuthError(KeeneticApiError):
     """Authentication failed."""
+
+
+class KeeneticUnsupportedAuthError(KeeneticAuthError):
+    """The router demands a sign-in scheme that could not be completed.
+
+    Distinct from a plain credential rejection: on KeeneticOS 5.2 the
+    router advertises NDW4 and refuses NDW2 even for the correct
+    password, so "invalid credentials" would send the user hunting for
+    a typo that doesn't exist. Callers must not start a reauth loop on
+    this — retrying only adds failed logins towards the router's
+    brute-force ban.
+    """
 
 
 class KeeneticClient:
@@ -210,6 +241,9 @@ class KeeneticClient:
         # challenge handshake. The flag keeps that retry to exactly once
         # per client, so a genuinely wrong password can't loop.
         self._basic_fallback_tried: bool = False
+        # Scheme behind the current session, for messages: "Basic",
+        # "NDW2" or "NDW4".
+        self._auth_scheme: str = "NDW2" if use_challenge_auth else "Basic"
 
         scheme = "https" if ssl else "http"
         # Bracket IPv6 literals so the URL is valid (#57). A bare
@@ -334,7 +368,7 @@ class KeeneticClient:
 
     @property
     def use_challenge_auth(self) -> bool:
-        """Whether the challenge (NDW2) handshake is the active scheme.
+        """Whether the interactive handshake (NDW2/NDW4) is the active scheme.
 
         Reads back as ``True`` after an automatic Basic-to-challenge
         fallback, so the config flow can persist the scheme that
@@ -366,8 +400,12 @@ class KeeneticClient:
         try:
             async with async_timeout.timeout(self._request_timeout):
                 resp = await self._session.get(url, headers=headers)
-        except aiohttp.ClientError as err:
-            raise KeeneticAuthError(f"Auth connection failed: {err}") from err
+        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+            # A transport failure says nothing about the credentials.
+            # Raising KeeneticAuthError here made an unreachable router,
+            # an SSL mismatch or a timeout show up as "invalid
+            # credentials" and kick off a pointless reauth flow.
+            raise KeeneticApiError(f"Auth connection failed: {err}") from err
 
         # Issue #64. KeeneticOS 5.x hardened HTTP auth and rejects Basic
         # on the web port, so a 401 here says "wrong scheme" at least as
@@ -379,8 +417,7 @@ class KeeneticClient:
             self._basic_fallback_tried = True
             _LOGGER.info(
                 "Basic auth rejected by %s:%s (HTTP 401) — retrying with "
-                "the challenge (NDW2) handshake, which KeeneticOS 5.x "
-                "requires",
+                "the router's interactive sign-in (NDW4 or NDW2)",
                 self._host,
                 self._port,
             )
@@ -397,6 +434,7 @@ class KeeneticClient:
             )
 
         self._auth_header = headers
+        self._auth_scheme = "Basic"
         self._authenticated = True
         _LOGGER.debug(
             "Authenticated to Keenetic router at %s:%s",
@@ -405,43 +443,174 @@ class KeeneticClient:
         )
 
     async def _async_authenticate_challenge(self) -> None:
-        """Perform NDW2 challenge-response auth used by newer Keenetic models (e.g. Hero).
+        """Sign in through the router's interactive handshake on /auth.
+
+        The session cookie that comes out of it replaces Basic auth on
+        every RCI call. See ``_async_interactive_sign_in`` for how the
+        scheme is chosen.
+        """
+        if self._session is None:
+            raise KeeneticAuthError("ClientSession is not set")
+
+        cookie, scheme = await self._async_interactive_sign_in(self._base)
+
+        self._auth_header = {"Cookie": cookie} if cookie else {}
+        self._auth_scheme = scheme
+        self._authenticated = True
+
+        _LOGGER.debug(
+            "Authenticated to Keenetic router at %s:%s (%s)",
+            self._host,
+            self._port,
+            scheme,
+        )
+
+    async def _async_interactive_sign_in(
+        self,
+        base: str,
+        probe: tuple[int, Any, Optional[str]] | None = None,
+    ) -> tuple[Optional[str], str]:
+        """Sign in to the router at ``base``; return (session cookie, scheme).
+
+        KeeneticOS 5.2 offers NDW4 and, on most units, still NDW2 — which
+        it then refuses even for the right password once the stored
+        password has been migrated (issue #71). So NDW4 always wins when
+        offered, and a rejected password there is final: trying NDW2 as
+        well would only add a failed login towards the router's
+        brute-force ban. NDW2 is tried after NDW4 only when NDW4 broke
+        for some other reason. Older firmware offers only NDW2.
+
+        ``probe`` is a GET /auth result the caller already holds.
+
+        Raises KeeneticAuthError when the router refuses the credentials,
+        KeeneticUnsupportedAuthError when it wants NDW4 and that could not
+        be completed, KeeneticApiError on connection failures.
+        """
+        auth_url = f"{base}/auth"
+        try:
+            status, headers, cookie = probe or await self._async_auth_probe(
+                auth_url
+            )
+            if status not in (200, 401):
+                raise KeeneticAuthError(
+                    f"Unexpected status during challenge GET ({status})"
+                )
+
+            offered, endpoint = ndw4.parse_offer(headers)
+            if not offered:
+                cookie = await self._async_ndw2_sign_in(auth_url, headers, cookie)
+                return cookie, "NDW2"
+
+            try:
+                cookie = await self._async_ndw4_sign_in(base, endpoint, cookie)
+                return cookie, "NDW4"
+            except ndw4.Ndw4CredentialsError as err:
+                raise KeeneticAuthError(f"NDW4 sign-in rejected: {err}") from err
+            except ndw4.Ndw4Error as err:
+                ndw4_error = err
+
+            _status, headers, cookie = await self._async_auth_probe(auth_url)
+            if not headers.get("X-NDM-Challenge"):
+                raise KeeneticUnsupportedAuthError(
+                    f"NDW4 sign-in failed: {ndw4_error}"
+                )
+            _LOGGER.warning(
+                "NDW4 sign-in to %s failed (%s) — trying the older NDW2 "
+                "sign-in the router also offers",
+                base,
+                ndw4_error,
+            )
+            try:
+                cookie = await self._async_ndw2_sign_in(auth_url, headers, cookie)
+            except KeeneticAuthError as err:
+                raise KeeneticUnsupportedAuthError(
+                    f"NDW4 sign-in failed ({ndw4_error}) and the router "
+                    "refused NDW2"
+                ) from err
+            return cookie, "NDW2"
+        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+            # A transport failure says nothing about the credentials.
+            raise KeeneticApiError(f"Sign-in connection failed: {err}") from err
+
+    async def _async_auth_probe(
+        self, auth_url: str
+    ) -> tuple[int, Any, Optional[str]]:
+        """GET /auth: the router's sign-in offer and a fresh session cookie."""
+        async with async_timeout.timeout(self._request_timeout):
+            async with self._session.get(auth_url, allow_redirects=False) as resp:
+                await resp.read()
+                status = resp.status
+                headers = resp.headers
+
+        # Never log the raw headers. Set-Cookie carries the session id,
+        # and X-NDM-Challenge / WWW-Authenticate carry the nonce — which,
+        # paired with the response hash, lets anyone brute-force the
+        # password offline.
+        _LOGGER.debug(
+            "Sign-in offer from %s: status=%s schemes=%s",
+            auth_url,
+            status,
+            _auth_scheme_names(headers),
+        )
+        return status, headers, ndw4.session_cookie(headers)
+
+    async def _async_ndw4_sign_in(
+        self, base: str, endpoint: Optional[str], cookie: Optional[str]
+    ) -> str:
+        """NDW4 handshake (``ndw4.py``), retried once on a protocol error.
+
+        The router's session cookie lives only 20 seconds, so a handshake
+        that stalls — Argon2 queued behind a busy executor while Home
+        Assistant starts, say — fails for reasons a fresh session fixes.
+        """
+        try:
+            return await self._async_ndw4_login(base, endpoint, cookie)
+        except ndw4.Ndw4ProtocolError as err:
+            _LOGGER.debug(
+                "NDW4 sign-in to %s failed (%s) — retrying once with a "
+                "fresh session",
+                base,
+                err,
+            )
+        _status, headers, cookie = await self._async_auth_probe(f"{base}/auth")
+        offered, endpoint = ndw4.parse_offer(headers)
+        if not offered:
+            raise ndw4.Ndw4ProtocolError("router stopped offering NDW4")
+        return await self._async_ndw4_login(base, endpoint, cookie)
+
+    async def _async_ndw4_login(
+        self, base: str, endpoint: Optional[str], cookie: Optional[str]
+    ) -> str:
+        if endpoint is None:
+            raise ndw4.Ndw4ProtocolError(
+                "router offered NDW4 without a usable endpoint"
+            )
+        return await ndw4.async_login(
+            self._session,
+            base,
+            endpoint,
+            self._username,
+            self._password,
+            cookie,
+            self._request_timeout,
+        )
+
+    async def _async_ndw2_sign_in(
+        self, auth_url: str, headers: Any, cookie: Optional[str]
+    ) -> Optional[str]:
+        """NDW2 challenge-response, used by KeeneticOS before 5.2.
 
         Handshake:
           1. GET /auth  → 401 with X-NDM-Challenge + X-NDM-Realm headers + Set-Cookie
+             (already done by the caller; ``headers`` and ``cookie`` come from it)
           2. Compute:
                ha1      = md5(username:realm:password)
                response = sha256(challenge + ha1)
           3. POST /auth  with JSON {login, password: response}  and the session cookie
           4. 200 → authenticated; subsequent requests use only the session cookie.
         """
-        if self._session is None:
-            raise KeeneticAuthError("ClientSession is not set")
-
-        auth_url = f"{self._base}/auth"
-
-        # --- Step 1: GET /auth to obtain challenge & session cookie ---
-        _LOGGER.debug("NDW2 challenge auth: GET %s", auth_url)
-        try:
-            async with async_timeout.timeout(self._request_timeout):
-                get_resp = await self._session.get(auth_url, allow_redirects=False)
-        except aiohttp.ClientError as err:
-            raise KeeneticAuthError(f"Challenge GET failed: {err}") from err
-
-        _LOGGER.debug(
-            "NDW2 challenge GET response: status=%s headers=%s",
-            get_resp.status,
-            dict(get_resp.headers),
-        )
-
-        if get_resp.status not in (200, 401):
-            text = await get_resp.text()
-            raise KeeneticAuthError(
-                f"Unexpected status during challenge GET ({get_resp.status}): {text}"
-            )
-
-        challenge = get_resp.headers.get("X-NDM-Challenge")
-        realm = get_resp.headers.get("X-NDM-Realm", "")
+        challenge = headers.get("X-NDM-Challenge")
+        realm = headers.get("X-NDM-Realm", "")
 
         if not challenge:
             raise KeeneticAuthError(
@@ -450,75 +619,51 @@ class KeeneticClient:
                 "try disabling 'Challenge Auth' and use Basic Auth instead."
             )
 
-        _LOGGER.debug("NDW2 challenge=%s realm=%s", challenge, realm)
-
-        # Extract session cookie from Set-Cookie header
-        session_cookie: str | None = None
-        # Extract session cookie manually — HA's shared CookieJar(unsafe=False)
+        _LOGGER.debug("NDW2 challenge received (realm=%s)", realm)
+        # The cookie is carried by hand — HA's shared CookieJar(unsafe=False)
         # silently ignores cookies from bare IP addresses.
-        raw_cookie = get_resp.headers.get("Set-Cookie", "")
-        if raw_cookie:
-            cookie_kv = raw_cookie.split(";")[0].strip()
-            if "=" in cookie_kv:
-                session_cookie = cookie_kv
+        _LOGGER.debug("NDW2 session cookie present: %s", bool(cookie))
 
-        _LOGGER.debug("NDW2 session cookie: %s", session_cookie)
-
-        # --- Step 2: Compute NDW2 hashes ---
-        # ha1      = md5(username:realm:password)   [hex digest]
-        # response = sha256(challenge + ha1)         [hex digest]
         ha1 = hashlib.md5(
             f"{self._username}:{realm}:{self._password}".encode()
         ).hexdigest()
         response_hash = hashlib.sha256((challenge + ha1).encode()).hexdigest()
+        # Neither value may ever be logged. ha1 is password-equivalent for
+        # NDW2 — it answers any future challenge without the password —
+        # and md5 is fast enough that a weak password falls to offline
+        # brute force from either hash.
 
-        _LOGGER.debug(
-            "NDW2 hash: ha1(md5)=%s response(sha256)=%s", ha1, response_hash
-        )
-
-        # --- Step 3: POST /auth with credentials + explicit Cookie header ---
         payload = {"login": self._username, "password": response_hash}
-        post_headers: Dict[str, str] = {}
-        if session_cookie:
-            post_headers["Cookie"] = session_cookie
+        post_headers: Dict[str, str] = {"Cookie": cookie} if cookie else {}
 
-        _LOGGER.debug("NDW2 challenge: POST %s payload_login=%s", auth_url, self._username)
+        _LOGGER.debug("NDW2 challenge: POST %s", auth_url)
 
-        try:
-            async with async_timeout.timeout(self._request_timeout):
-                post_resp = await self._session.post(
-                    auth_url,
-                    json=payload,
-                    headers=post_headers,
-                )
-        except aiohttp.ClientError as err:
-            raise KeeneticAuthError(f"Challenge POST failed: {err}") from err
-
-        post_text = await post_resp.text()
-        _LOGGER.debug(
-            "NDW2 challenge POST response: status=%s body=%s",
-            post_resp.status,
-            post_text[:200],
-        )
-
-        if post_resp.status == 401:
-            raise KeeneticAuthError(
-                f"Challenge auth rejected — wrong credentials? (body={post_text!r})"
-            )
-        if post_resp.status not in (200, 204):
-            raise KeeneticAuthError(
-                f"Challenge auth failed (status={post_resp.status}, body={post_text!r})"
-            )
-
-        # Store cookie in _auth_header so every subsequent RCI request includes it.
-        self._auth_header = {"Cookie": session_cookie} if session_cookie else {}
-        self._authenticated = True
+        async with async_timeout.timeout(self._request_timeout):
+            async with self._session.post(
+                auth_url,
+                json=payload,
+                headers=post_headers,
+            ) as post_resp:
+                post_text = await post_resp.text()
+                status = post_resp.status
+                reply_headers = post_resp.headers
 
         _LOGGER.debug(
-            "Authenticated to Keenetic router at %s:%s (NDW2 challenge OK)",
-            self._host,
-            self._port,
+            "NDW2 challenge POST response: status=%s schemes=%s body_len=%s",
+            status,
+            _auth_scheme_names(reply_headers),
+            len(post_text),
         )
+
+        if status == 401:
+            raise KeeneticAuthError(
+                "Challenge auth rejected — wrong credentials, or the router "
+                "no longer accepts the NDW2 handshake"
+            )
+        if status not in (200, 204):
+            raise KeeneticAuthError(f"Challenge auth failed (status={status})")
+
+        return cookie
 
     async def _ensure_auth(self) -> None:
         """Ensure we are authenticated before making an RCI call.
@@ -666,7 +811,9 @@ class KeeneticClient:
                 # this client may be on the challenge handshake, and a
                 # message blaming "Basic" sends users down the wrong path.
                 scheme_name = (
-                    "Challenge (NDW2)" if self._use_challenge_auth else "Basic"
+                    "Basic"
+                    if self._auth_scheme == "Basic"
+                    else f"Challenge ({self._auth_scheme})"
                 )
                 _LOGGER.error(
                     "Keenetic auth rejected after re-auth retry (%s): %s",
@@ -1133,8 +1280,12 @@ class KeeneticClient:
             safe_iface = _validate_cli_arg(interface_id, "interface id")
             result = await self._rci_parse(f"more interface {safe_iface}")
             network_methods_attempted += 1
-            _LOGGER.debug("WiFi password Method 5 (CLI) response: %s",
-                         str(result)[:500] if result else "None")
+            # Size only: this is the AP's running config and contains the
+            # PSK in plain text.
+            _LOGGER.debug(
+                "WiFi password Method 5 (CLI) response: %d chars",
+                len(str(result)) if result else 0,
+            )
             # The Keenetic CLI never raises HTTP 404 for unknown
             # interfaces — it returns a 200 OK body with an "Argument
             # parse error" string (sometimes "command not found",
@@ -4027,10 +4178,12 @@ class KeeneticClient:
     async def _authenticate_to_node(
         self, node_ip: str, port: int | None = None
     ) -> Dict[str, str] | None:
-        """Perform NDW2 challenge auth against a specific mesh node.
+        """Sign in to a specific mesh node with the interactive handshake.
 
-        Always attempts challenge auth first since mesh nodes typically
-        require it, even when the controller uses Basic Auth.
+        Mesh nodes typically require it even when the controller takes
+        Basic Auth, and a node on KeeneticOS 5.2 wants NDW4 just like a
+        controller does. A node that offers no interactive sign-in gets
+        the controller's own auth header instead.
 
         Returns headers dict with session cookie, or None if auth failed.
         """
@@ -4042,66 +4195,24 @@ class KeeneticClient:
             return None
 
         scheme = "https" if self._ssl else "http"
-        auth_url = f"{scheme}://{safe_node_host}:{port}/auth"
+        base = f"{scheme}://{safe_node_host}:{port}"
 
         try:
-            # Step 1: GET /auth to get challenge
-            async with async_timeout.timeout(self._request_timeout):
-                get_resp = await self._session.get(
-                    auth_url, allow_redirects=False
-                )
-
-            challenge = get_resp.headers.get("X-NDM-Challenge")
-            realm = get_resp.headers.get("X-NDM-Realm", "")
-
-            if not challenge:
+            probe = await self._async_auth_probe(f"{base}/auth")
+            _status, headers, _cookie = probe
+            if not ndw4.parse_offer(headers)[0] and not headers.get(
+                "X-NDM-Challenge"
+            ):
                 _LOGGER.debug(
-                    "Node %s did not return challenge header, "
+                    "Node %s did not offer an interactive sign-in, "
                     "trying basic auth fallback",
                     node_ip,
                 )
                 return dict(self._auth_header or {})
 
-            # Step 2: Compute hash
-            ha1 = hashlib.md5(
-                f"{self._username}:{realm}:{self._password}".encode()
-            ).hexdigest()
-            response_hash = hashlib.sha256(
-                (challenge + ha1).encode()
-            ).hexdigest()
-
-            # Extract session cookie
-            raw_cookie = get_resp.headers.get("Set-Cookie", "")
-            session_cookie = None
-            if raw_cookie:
-                cookie_kv = raw_cookie.split(";")[0].strip()
-                if "=" in cookie_kv:
-                    session_cookie = cookie_kv
-
-            # Step 3: POST /auth with credentials
-            post_headers: Dict[str, str] = {}
-            if session_cookie:
-                post_headers["Cookie"] = session_cookie
-
-            async with async_timeout.timeout(self._request_timeout):
-                post_resp = await self._session.post(
-                    auth_url,
-                    json={"login": self._username, "password": response_hash},
-                    headers=post_headers,
-                )
-
-            if post_resp.status in (200, 204):
-                _LOGGER.debug(
-                    "Challenge auth to node %s:%s succeeded", node_ip, port
-                )
-                return {"Cookie": session_cookie} if session_cookie else {}
-
-            _LOGGER.debug(
-                "Challenge auth to node %s:%s returned status %s",
-                node_ip, port, post_resp.status,
+            cookie, auth_scheme = await self._async_interactive_sign_in(
+                base, probe
             )
-            return None
-
         except asyncio.TimeoutError:
             _LOGGER.debug("Timeout during auth to node %s:%s", node_ip, port)
             return None
@@ -4110,6 +4221,11 @@ class KeeneticClient:
                 "Auth to node %s:%s failed: %s", node_ip, port, err
             )
             return None
+
+        _LOGGER.debug(
+            "%s sign-in to node %s:%s succeeded", auth_scheme, node_ip, port
+        )
+        return {"Cookie": cookie} if cookie else {}
 
 
     async def async_get_update_progress(self) -> Dict[str, Any]:

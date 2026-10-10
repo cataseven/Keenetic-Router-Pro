@@ -10,7 +10,7 @@
           "username": "Имя пользователя",
           "password": "Пароль",
           "ssl": "Использовать SSL",
-          "use_challenge_auth": "Использовать Challenge Auth (NDW2, требуется для новых моделей, например Hero)"
+          "use_challenge_auth": "Использовать Challenge Auth (NDW2/NDW4, требуется для новых моделей, например Hero, и для KeeneticOS 5.2)"
         }
       },
       "select_clients": {
@@ -38,12 +38,13 @@
           "username": "Имя пользователя",
           "password": "Пароль",
           "ssl": "Использовать SSL",
-          "use_challenge_auth": "Использовать Challenge Auth (NDW2)"
+          "use_challenge_auth": "Использовать Challenge Auth (NDW2/NDW4)"
         }
       }
     },
     "error": {
       "invalid_auth": "Неверные учетные данные",
+      "ndw4_unsupported": "Роутер требует новый способ входа KeeneticOS 5.2 (NDW4), и выполнить его не удалось. Пароль, скорее всего, верный — включите отладочный журнал и сообщите в GitHub issue #71.",
       "cannot_connect": "Не удается подключиться к роутеру",
       "unknown": "Произошла неизвестная ошибка"
     },

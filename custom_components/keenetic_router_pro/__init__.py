@@ -10,13 +10,22 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.exceptions import (
+    ConfigEntryAuthFailed,
+    ConfigEntryError,
+    ConfigEntryNotReady,
+)
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .api import KeeneticClient, KeeneticAuthError, KeeneticApiError
+from .api import (
+    KeeneticClient,
+    KeeneticAuthError,
+    KeeneticApiError,
+    KeeneticUnsupportedAuthError,
+)
 from .const import (
     DOMAIN,
     DEFAULT_PORT,
@@ -178,6 +187,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     try:
         await client.async_start(session)
+    except KeeneticUnsupportedAuthError as err:
+        # Must come before KeeneticAuthError (it is a subclass). A
+        # reauth flow can never succeed here — the password is likely
+        # right, the router wants a sign-in we couldn't complete — and
+        # every retry adds a failed login towards the router's
+        # brute-force ban. ConfigEntryError stops HA from retrying and
+        # shows this message on the integration card instead.
+        raise ConfigEntryError(
+            "The router requires the KeeneticOS 5.2 sign-in method (NDW4) "
+            f"and it could not be completed: {err}. See GitHub issue #71."
+        ) from err
     except KeeneticAuthError as err:
         # Auth-specific failure -> raise ConfigEntryAuthFailed which
         # HA wires automatically into the reauth flow (Repairs card
