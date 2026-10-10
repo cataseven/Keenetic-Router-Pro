@@ -10,7 +10,7 @@
           "username": "Username",
           "password": "Password",
           "ssl": "Use SSL",
-          "use_challenge_auth": "Use Challenge Auth (NDW2, required for newer models like Hero)"
+          "use_challenge_auth": "Use Challenge Auth (NDW2/NDW4, required for newer models like Hero and for KeeneticOS 5.2)"
         }
       },
       "select_clients": {
@@ -23,6 +23,7 @@
     },
     "error": {
       "invalid_auth": "Invalid authentication credentials",
+      "ndw4_unsupported": "The router requires the new KeeneticOS 5.2 sign-in (NDW4) and it could not be completed. Your password may well be correct — please enable debug logging and report it on GitHub issue #71.",
       "cannot_connect": "Cannot connect to router",
       "unknown": "Unknown error occurred"
     },

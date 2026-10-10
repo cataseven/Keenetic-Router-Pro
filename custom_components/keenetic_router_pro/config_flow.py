@@ -33,7 +33,12 @@ _PASSWORD_SELECTOR = selector.TextSelector(
     selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
 )
 
-from .api import KeeneticClient, KeeneticAuthError, KeeneticApiError
+from .api import (
+    KeeneticClient,
+    KeeneticAuthError,
+    KeeneticApiError,
+    KeeneticUnsupportedAuthError,
+)
 from .const import (
     DOMAIN,
     DEFAULT_PORT,
@@ -113,7 +118,17 @@ class KeeneticRouterProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Handle the initial step."""
         errors: dict[str, str] = {}
         
-        _LOGGER.debug("Step user called with input: %s", user_input)
+        # The form carries the router password in plain text — mask it
+        # before it can reach a log that gets pasted into an issue.
+        _LOGGER.debug(
+            "Step user called with input: %s",
+            {
+                k: ("**REDACTED**" if k == CONF_PASSWORD else v)
+                for k, v in user_input.items()
+            }
+            if user_input
+            else user_input,
+        )
 
         if user_input is not None:
             try:
@@ -231,11 +246,22 @@ class KeeneticRouterProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         data={**user_input, CONF_TRACKED_CLIENTS: []},
                     )
 
+            except KeeneticUnsupportedAuthError as err:
+                # Before KeeneticAuthError: it's a subclass, and showing
+                # "invalid credentials" for it sent KeeneticOS 5.2 users
+                # hunting for a typo that wasn't there (issue #71).
+                _LOGGER.error("Router sign-in not supported: %s", err)
+                errors["base"] = "ndw4_unsupported"
             except KeeneticAuthError as err:
                 _LOGGER.error("Authentication failed: %s", err)
                 errors["base"] = "invalid_auth"
             except KeeneticApiError as err:
                 _LOGGER.error("API/connection error: %s", err)
+                errors["base"] = "cannot_connect"
+            except TimeoutError as err:
+                # Post-auth fetches (system info, interfaces) aren't wrapped
+                # by the client, so a slow router surfaced as "unknown".
+                _LOGGER.error("Router did not answer in time: %s", err)
                 errors["base"] = "cannot_connect"
             except data_entry_flow.AbortFlow:
                 # HA's expected control-flow signal for "this device is
@@ -376,10 +402,13 @@ class KeeneticRouterProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             # entry stops retrying a scheme the router refuses.
             candidate[CONF_USE_CHALLENGE_AUTH] = client.use_challenge_auth
             return None
+        except KeeneticUnsupportedAuthError as err:
+            _LOGGER.warning("Router sign-in not supported: %s", err)
+            return "ndw4_unsupported"
         except KeeneticAuthError as err:
             _LOGGER.debug("Auth test failed: %s", err)
             return "invalid_auth"
-        except KeeneticApiError as err:
+        except (KeeneticApiError, TimeoutError) as err:
             _LOGGER.debug("Connection test failed: %s", err)
             return "cannot_connect"
         except Exception:  # noqa: BLE001
