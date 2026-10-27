@@ -497,6 +497,14 @@ class ClientEntity(_FingerprintedCoordinatorEntity):
             return ping_results.get(self._mac, False)
         else:
             client = self._client
-            if client:
-                return str(client.get("link", "")).lower() == "up"
-            return False
+            if not client:
+                return False
+            link = str(client.get("link", "")).lower()
+            if link == "up":
+                return True
+            active = client.get("active")
+            if isinstance(active, bool):
+                return active
+            if isinstance(active, str):
+                return active.lower() in ("true", "yes", "1", "up", "online")
+            return bool(active)
