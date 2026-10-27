@@ -235,12 +235,10 @@ class KeeneticClientTracker(ClientEntity, ScannerEntity):
     def is_connected(self) -> bool:
         if self._is_apple_device:
             # Apple devices sleep aggressively and stop answering ICMP
-            # while otherwise online — link-state is the only reliable
-            # signal for them. Pre-existing behaviour, kept verbatim.
-            client = self._client_from_main
-            if client:
-                return str(client.get("link", "")).lower() == "up"
-            return False
+            # while otherwise online — router link/active state is the only reliable
+            # signal for them. In Keenetic Mesh systems with extenders (e.g. Buddy),
+            # clients connected to extenders report active=True while link is None/empty.
+            return self._router_says_connected()
 
         # Non-Apple devices: ICMP is the primary signal. If a device
         # answers ICMP, it's definitively online — no need to consult
@@ -285,6 +283,7 @@ class KeeneticClientTracker(ClientEntity, ScannerEntity):
                 "tracking_method": "link_state",
                 "presence_source": "link_state",
                 "link_status": client_link,
+                "router_active": (client or {}).get("active"),
             }
         else:
             ping_ok = bool(ping_results.get(self._mac, False))
