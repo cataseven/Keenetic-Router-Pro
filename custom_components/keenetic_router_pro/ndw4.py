@@ -310,8 +310,7 @@ async def _request(
     """One handshake round-trip; returns (status, headers, cookie).
 
     The cookie travels in an explicit header because Home Assistant's
-    shared CookieJar ignores cookies from bare IP addresses, which is
-    how most people address their router. A refreshed Set-Cookie
+    session does not store cookies automatically. A refreshed Set-Cookie
     replaces it.
     """
     headers = {"Cookie": cookie} if cookie else {}

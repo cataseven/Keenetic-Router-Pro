@@ -18,7 +18,6 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import selector
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.service_info.ssdp import SsdpServiceInfo
 from homeassistant.helpers.device_registry import format_mac
 
@@ -33,6 +32,7 @@ _PASSWORD_SELECTOR = selector.TextSelector(
     selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
 )
 
+from . import async_get_router_session
 from .api import (
     KeeneticClient,
     KeeneticAuthError,
@@ -157,7 +157,7 @@ class KeeneticRouterProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if raw_host:
                     user_input[CONF_HOST] = raw_host
 
-                session = async_get_clientsession(self.hass)
+                session = async_get_router_session(self.hass)
                 client = KeeneticClient(
                     host=user_input[CONF_HOST],
                     username=user_input[CONF_USERNAME],
@@ -386,7 +386,7 @@ class KeeneticRouterProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         don't connect.
         """
         try:
-            session = async_get_clientsession(self.hass)
+            session = async_get_router_session(self.hass)
             client = KeeneticClient(
                 host=candidate[CONF_HOST],
                 username=candidate[CONF_USERNAME],
@@ -688,7 +688,7 @@ class KeeneticOptionsFlow(config_entries.OptionsFlow):
         try:
             # Initialize client
             data = self._config_entry.data
-            session = async_get_clientsession(self.hass)
+            session = async_get_router_session(self.hass)
             client = KeeneticClient(
                 host=data[CONF_HOST],
                 username=data[CONF_USERNAME],

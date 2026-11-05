@@ -633,8 +633,7 @@ class KeeneticClient:
             )
 
         _LOGGER.debug("NDW2 challenge received (realm=%s)", realm)
-        # The cookie is carried by hand — HA's shared CookieJar(unsafe=False)
-        # silently ignores cookies from bare IP addresses.
+        # Keep this handshake's cookie separate from other router clients.
         _LOGGER.debug("NDW2 session cookie present: %s", bool(cookie))
 
         ha1 = hashlib.md5(
@@ -676,7 +675,7 @@ class KeeneticClient:
         if status not in (200, 204):
             raise KeeneticAuthError(f"Challenge auth failed (status={status})")
 
-        return cookie
+        return ndw4.session_cookie(reply_headers) or cookie
 
     async def _ensure_auth(self) -> None:
         """Ensure we are authenticated before making an RCI call.
