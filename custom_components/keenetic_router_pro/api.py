@@ -800,54 +800,55 @@ class KeeneticClient:
             except aiohttp.ClientError as err:
                 raise KeeneticApiError(f"Connection error: {err}") from err
 
-            # 401: transient session eviction (cloud) or bad credentials.
             if resp.status == 401:
                 text = await resp.text()
-                self._authenticated = False
-                if _allow_reauth_retry:
-                    _LOGGER.debug(
-                        "Keenetic 401 on %s — re-authenticating and "
-                        "retrying once (likely a transient cloud session "
-                        "drop, not a credential error)",
-                        path,
-                    )
-                    await self._reauth_after_401(auth_generation)
-                    return await self._request(
-                        method,
-                        path,
-                        params=params,
-                        json=json,
-                        allow_text=allow_text,
-                        _allow_reauth_retry=False,
-                    )
-                # Name the scheme actually in use: after the #64 fallback
-                # this client may be on the challenge handshake, and a
-                # message blaming "Basic" sends users down the wrong path.
-                scheme_name = (
-                    "Basic"
-                    if self._auth_scheme == "Basic"
-                    else f"Challenge ({self._auth_scheme})"
-                )
-                _LOGGER.error(
-                    "Keenetic auth rejected after re-auth retry (%s): %s",
-                    scheme_name,
-                    text,
-                )
-                raise KeeneticAuthError(f"{scheme_name} auth rejected: {text}")
-
-            if resp.status >= 400:
+            elif resp.status >= 400:
                 text = await resp.text()
                 raise KeeneticApiError(
                     f"HTTP error {resp.status} for {path}: {text}"
                 )
 
-            if allow_text:
+            elif allow_text:
                 ctype = resp.headers.get("Content-Type", "")
                 if "application/json" in ctype:
                     return await resp.json()
                 return await resp.text()
+            else:
+                return await resp.json()
 
-            return await resp.json()
+        # The retry needs its own slot. Release this slot before re-authenticating.
+        if _allow_reauth_retry:
+            _LOGGER.debug(
+                "Keenetic 401 on %s — re-authenticating and "
+                "retrying once (likely a transient cloud session "
+                "drop, not a credential error)",
+                path,
+            )
+            await self._reauth_after_401(auth_generation)
+            return await self._request(
+                method,
+                path,
+                params=params,
+                json=json,
+                allow_text=allow_text,
+                _allow_reauth_retry=False,
+            )
+        if self._auth_generation == auth_generation:
+            self._authenticated = False
+        # Name the scheme actually in use: after the #64 fallback
+        # this client may be on the challenge handshake, and a
+        # message blaming "Basic" sends users down the wrong path.
+        scheme_name = (
+            "Basic"
+            if self._auth_scheme == "Basic"
+            else f"Challenge ({self._auth_scheme})"
+        )
+        _LOGGER.error(
+            "Keenetic auth rejected after re-auth retry (%s): %s",
+            scheme_name,
+            text,
+        )
+        raise KeeneticAuthError(f"{scheme_name} auth rejected: {text}")
 
     async def _rci_get(
         self,
