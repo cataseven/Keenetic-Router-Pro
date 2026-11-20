@@ -148,6 +148,7 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ipsec_diagnostics,
             lte_data_usage,
             lte_sim_slots,
+            port_forwards,
         ) = await asyncio.gather(
             _bounded(self.client.async_get_system_info),
             _bounded(self.client.async_get_current_version_info),
@@ -183,6 +184,7 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # (NOT the status one — same field name, different meaning).
             # Silent fetch: routers without an LTE/USB modem return {}.
             _bounded(self.client.async_get_lte_sim_slots),
+            _bounded(self.client.async_get_port_forwards),
             return_exceptions=True,
         )
  
@@ -198,6 +200,7 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Silent: most setups don't have a cellular interface.
         lte_data_usage = _ok("lte_data_usage", lte_data_usage, {}, silent=True)
         lte_sim_slots = _ok("lte_sim_slots", lte_sim_slots, {}, silent=True)
+        port_forwards = _ok("port_forwards", port_forwards, {}, silent=True)
         ndns_info = _ok("ndns_info", ndns_info, {})
         usb_storage = _ok("usb_storage", usb_storage, [])
         interface_stats = _ok("interface_stats", interface_stats, {})
@@ -589,6 +592,7 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "traffic_shapes": traffic_shapes,
             "lte_data_usage": lte_data_usage,
             "lte_sim_slots": lte_sim_slots,
+            "port_forwards": port_forwards,
             "usb_storage": usb_storage,
             "port_info": port_info,
             "mesh_usb": mesh_usb,

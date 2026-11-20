@@ -8,12 +8,22 @@ import logging
 import random
 from typing import Any
 
+import voluptuous as vol
+
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import (
+    HomeAssistant,
+    ServiceCall,
+    ServiceResponse,
+    SupportsResponse,
+    callback,
+)
 from homeassistant.exceptions import (
     ConfigEntryAuthFailed,
     ConfigEntryError,
     ConfigEntryNotReady,
+    HomeAssistantError,
+    ServiceValidationError,
 )
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import issue_registry as ir
@@ -111,6 +121,31 @@ def _async_update_insecure_http_issue(
 PLATFORMS: list[str] = ["sensor", "switch", "device_tracker", "button", "binary_sensor", "select", "update", "image", "number"]
 
 
+async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
+    """Register the read-only port forwarding action."""
+
+    async def async_list_port_forwards(call: ServiceCall) -> ServiceResponse:
+        entry_id = call.data["config_entry_id"]
+        entry_data = hass.data.get(DOMAIN, {}).get(entry_id)
+        if not entry_data:
+            raise ServiceValidationError("Select a loaded Keenetic Router Pro entry")
+        client: KeeneticClient = entry_data[DATA_CLIENT]
+        try:
+            rules = await client.async_get_port_forwards()
+        except (KeeneticApiError, TimeoutError, ValueError) as err:
+            raise HomeAssistantError("Could not read port forwarding rules from Keenetic") from err
+        return {"rules": list(rules.values())}
+
+    hass.services.async_register(
+        DOMAIN,
+        "list_port_forwards",
+        async_list_port_forwards,
+        schema=vol.Schema({vol.Required("config_entry_id"): vol.All(str, vol.Length(min=1))}),
+        supports_response=SupportsResponse.ONLY,
+    )
+    return True
+
+
 def _is_cloud_host_entry(entry: ConfigEntry) -> bool:
     """Cheap cloud-mode test for a config entry (no client construction)."""
     from .api import is_cloud_keendns_host
@@ -160,10 +195,6 @@ def _cloud_startup_jitter(hass: HomeAssistant, entry: ConfigEntry) -> float:
         CLOUD_STARTUP_JITTER_CAP,
     )
     return random.uniform(0.0, window) if window > 0 else 0.0
-
-
-async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
