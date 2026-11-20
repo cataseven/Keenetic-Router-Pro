@@ -240,6 +240,7 @@ class KeeneticClient:
         self._ssl = ssl
         self._request_timeout = request_timeout
         self._use_challenge_auth = use_challenge_auth
+        self._port_forward_lock = asyncio.Lock()
         # Issue #64: KeeneticOS 5.2 (release note NDM-4515, "upgraded the
         # system authentication method for the HTTP suite") rejects Basic
         # auth on the web port. A 401 there is not proof of a bad
@@ -2716,6 +2717,79 @@ class KeeneticClient:
                 err,
             )
 
+
+    @staticmethod
+    def _check_port_forward_response(result: Any) -> None:
+        """Raise on nested RCI errors, even when the HTTP request succeeded."""
+        if isinstance(result, dict):
+            if result.get("status") == "error":
+                message = result.get("message") or result.get("code") or "unknown error"
+                raise KeeneticApiError(f"Port forwarding RCI error: {message}")
+            for value in result.values():
+                KeeneticClient._check_port_forward_response(value)
+        elif isinstance(result, list):
+            for value in result:
+                KeeneticClient._check_port_forward_response(value)
+
+    async def async_get_port_forwards(self) -> dict[str, dict[str, Any]]:
+        """Read configured interface-based destination port forwards by index."""
+        data = await self._rci_get("ip/static")
+        self._check_port_forward_response(data)
+        if not isinstance(data, list):
+            raise KeeneticApiError("Unexpected port forwarding response from Keenetic")
+
+        rules: dict[str, dict[str, Any]] = {}
+        for rule in data:
+            if not isinstance(rule, dict):
+                continue
+            index = rule.get("index")
+            port = rule.get("port")
+            if (
+                not isinstance(index, str)
+                or not re.fullmatch(r"[0-9a-fA-F]{32}", index)
+                or not rule.get("interface")
+                or not (rule.get("to-host") or rule.get("to-address"))
+                or port is None
+            ):
+                continue
+            try:
+                if ipaddress.ip_address(rule.get("to-address", "")).is_loopback:
+                    continue
+            except ValueError:
+                pass
+
+            disabled = rule.get("disable", False)
+            if not isinstance(disabled, bool):
+                raise KeeneticApiError("Unexpected port forwarding state from Keenetic")
+            rules[index] = {
+                "index": index,
+                "name": str(rule.get("comment") or ""),
+                "interface": rule["interface"],
+                "protocol": str(rule.get("protocol") or ""),
+                "port": port,
+                "end_port": rule.get("end-port"),
+                "enabled": not disabled,
+            }
+        return rules
+
+    async def async_set_port_forward_enabled(self, index: str, enabled: bool) -> None:
+        """Set a known forward, verify its running state, then save it."""
+        async with self._port_forward_lock:
+            rule = (await self.async_get_port_forwards()).get(index)
+            if rule is None:
+                raise KeeneticApiError("Port forwarding rule no longer exists")
+            if rule["enabled"] != enabled:
+                result = await self._rci_post(
+                    "", [{"ip": {"index": index, "static": {"disable": not enabled}}}]
+                )
+                self._check_port_forward_response(result)
+                rule = (await self.async_get_port_forwards()).get(index)
+                if rule is None or rule["enabled"] != enabled:
+                    raise KeeneticApiError("Keenetic did not confirm the requested state")
+
+            # Also save on a repeated request: a previous save could have failed.
+            result = await self._rci_post("", [{"system": {"configuration": {"save": {}}}}])
+            self._check_port_forward_response(result)
 
     async def async_get_mesh_nodes(self) -> List[Dict[str, Any]]:
         """Get mesh/extender nodes status from mws/member endpoint.

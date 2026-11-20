@@ -1,0 +1,11 @@
+list_port_forwards:
+  name: List port forwards
+  description: Read the current port forwarding rules directly from the router.
+  fields:
+    config_entry_id:
+      name: Keenetic router
+      description: Select the Keenetic Router Pro configuration entry to query.
+      required: true
+      selector:
+        config_entry:
+          integration: keenetic_router_pro
