@@ -212,5 +212,28 @@
       "title": "Plaintext HTTP connection to {title}",
       "description": "The Keenetic Router Pro integration is configured to connect to {host} over plaintext HTTP (SSL disabled). On every poll, the router username, the NDW2 challenge response (or Basic Auth header) and the session cookie traverse your LAN unencrypted. Anyone on the same broadcast domain can capture them.\n\nTo fix:\n1. Enable HTTPS on the router admin UI (System Settings → Web Configurator → enable HTTPS).\n2. Reconfigure this integration with SSL enabled (Settings → Devices & Services → Keenetic Router Pro → Configure).\n3. If the new HTTPS port differs from the old one, update it too.\n\nLoopback hosts (127.0.0.1 / localhost) and SSH-tunneled targets do not trigger this warning. See SECURITY.md for the full threat model."
     }
+  },
+  "services": {
+    "list_port_forwards": {
+      "name": "List port forwards",
+      "description": "Reads the port forwarding rules straight from the router. Returns a rules list with index, name, interface, protocol, port, end_port, to_port and enabled.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Router",
+          "description": "The Keenetic Router Pro entry to read."
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "entry_not_loaded": {
+      "message": "The selected Keenetic Router Pro entry is not loaded"
+    },
+    "port_forward_read_failed": {
+      "message": "Could not read the port forwarding rules from the router: {error}"
+    },
+    "port_forward_set_failed": {
+      "message": "Could not change the port forwarding rule: {error}"
+    }
   }
 }
