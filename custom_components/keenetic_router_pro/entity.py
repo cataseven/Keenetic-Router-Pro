@@ -60,7 +60,7 @@ class _FingerprintedCoordinatorEntity(CoordinatorEntity):
     """
 
     _FINGERPRINT_IGNORE: frozenset = frozenset()
-    _last_fingerprint: Optional[Dict[str, Any]] = None
+    _last_fingerprint: Optional[tuple[bool, Dict[str, Any]]] = None
 
     @property
     def _fingerprint_source(self) -> Optional[Dict[str, Any]]:
@@ -81,15 +81,12 @@ class _FingerprintedCoordinatorEntity(CoordinatorEntity):
     @callback
     def _handle_coordinator_update(self) -> None:
         source = self._fingerprint_source
-        # ``source is None`` -> source unknown for this tick (e.g. first
-        # tick before coordinator data lands, or row removed from
-        # router config). Fall through to the default behaviour so
-        # availability transitions still propagate.
-        if source is not None:
-            fingerprint = _entity_fingerprint(source, self._FINGERPRINT_IGNORE)
-            if fingerprint is not None and fingerprint == self._last_fingerprint:
-                return
-            self._last_fingerprint = fingerprint
+        row = _entity_fingerprint(source, self._FINGERPRINT_IGNORE)
+        # An unchanged row can still become unavailable or recover.
+        fingerprint = (self.available, row) if row is not None else None
+        if fingerprint is not None and fingerprint == self._last_fingerprint:
+            return
+        self._last_fingerprint = fingerprint
         super()._handle_coordinator_update()
 
 
