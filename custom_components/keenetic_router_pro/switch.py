@@ -1,12 +1,14 @@
-"""Switches for Keenetic Router Pro (Wi-Fi + WireGuard on/off + port forwarding)."""
+"""Switches for Keenetic Router Pro (Wi-Fi, VPN, IPsec, port forwarding)."""
 from __future__ import annotations
 from typing import Any
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from .api import KeeneticApiError, KeeneticClient
+from aiohttp import ClientError
+from .api import KeeneticApiError, KeeneticClient, describe_error
 from .const import DOMAIN, DATA_CLIENT, DATA_COORDINATOR
 from .coordinator import KeeneticCoordinator
 from .entity import ControllerEntity, CryptoMapEntity
@@ -100,21 +102,28 @@ async def async_setup_entry(
         coordinator.async_add_listener(_async_add_new_crypto_maps)
     )
 
+    # Port forwarding rules: one switch per rule, picked up from the web
+    # UI without a restart. Rules that are deleted later turn the
+    # switch unavailable.
     known_forward_indexes: set[str] = set()
 
     @callback
     def _async_add_new_port_forwards() -> None:
-        new_entities = []
-        for index, rule in coordinator.data.get("port_forwards", {}).items():
+        new_entities: list[SwitchEntity] = []
+        for index, rule in (coordinator.data.get("port_forwards") or {}).items():
             if index in known_forward_indexes:
                 continue
             known_forward_indexes.add(index)
-            new_entities.append(KeeneticPortForwardSwitch(coordinator, entry, client, index, rule))
+            new_entities.append(
+                KeeneticPortForwardSwitch(coordinator, entry, client, index, rule)
+            )
         if new_entities:
             async_add_entities(new_entities)
 
     _async_add_new_port_forwards()
-    entry.async_on_unload(coordinator.async_add_listener(_async_add_new_port_forwards))
+    entry.async_on_unload(
+        coordinator.async_add_listener(_async_add_new_port_forwards)
+    )
 
 
 class BaseKeeneticSwitch(ControllerEntity, SwitchEntity):
@@ -132,9 +141,19 @@ class BaseKeeneticSwitch(ControllerEntity, SwitchEntity):
 
 
 class KeeneticPortForwardSwitch(BaseKeeneticSwitch):
-    """Opt-in switch for an existing destination port forward."""
+    """Turn an existing port forwarding rule on or off.
+
+    Safety, because an "on" here opens a port to the internet:
+    * disabled by default — the user enables only the rules they want;
+    * ``EntityCategory.CONFIG`` — Home Assistant does not expose
+      configuration entities to Assist, LLM agents or HomeKit by
+      default, so a voice command cannot open a port by accident;
+    * the api layer re-reads the rule, verifies the change and only
+      then saves the router configuration.
+    """
 
     _attr_entity_registry_enabled_default = False
+    _attr_entity_category = EntityCategory.CONFIG
     _attr_icon = "mdi:lan-connect"
 
     def __init__(
@@ -148,15 +167,31 @@ class KeeneticPortForwardSwitch(BaseKeeneticSwitch):
         super().__init__(coordinator, entry, client)
         self._index = index
         self._attr_unique_id = f"{entry.entry_id}_port_forward_{index}"
-        ports = str(rule["port"])
-        if rule["end_port"] is not None:
-            ports += f"–{rule['end_port']}"
-        parts = ["Port forward", rule["protocol"].upper(), ports, rule["name"]]
-        self._attr_name = " ".join(part for part in parts if part)
+        # "Port forward NAS TCP 8443 (ISP)", "Port forward UDP 51820-51821
+        # (ISP)". Protocol, port and interface are always part of the name:
+        # the same port is often forwarded once per WAN, and several rules
+        # often share one comment. The user picks which switch to enable
+        # from the disabled list, where no attributes are shown.
+        parts = (
+            str(rule.get("name") or ""),
+            str(rule.get("protocol") or "").upper(),
+            self._ports(rule),
+        )
+        label = " ".join(part for part in parts if part)
+        self._attr_name = f"Port forward {label} ({rule.get('interface')})"
+
+    @staticmethod
+    def _ports(rule: dict[str, Any]) -> str:
+        ports = str(rule.get("port"))
+        if rule.get("end_port") is not None:
+            ports += f"-{rule['end_port']}"
+        return ports
 
     @property
     def _rule(self) -> dict[str, Any] | None:
-        return self.coordinator.data.get("port_forwards", {}).get(self._index)
+        rules = self.coordinator.data.get("port_forwards") or {}
+        rule = rules.get(self._index)
+        return rule if isinstance(rule, dict) else None
 
     @property
     def available(self) -> bool:
@@ -167,18 +202,43 @@ class KeeneticPortForwardSwitch(BaseKeeneticSwitch):
         rule = self._rule
         return rule["enabled"] if rule is not None else None
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        rule = self._rule
+        if rule is None:
+            return None
+        return {
+            "interface": rule.get("interface"),
+            "protocol": rule.get("protocol"),
+            "port": self._ports(rule),
+            "to_port": rule.get("to_port"),
+            "comment": rule.get("name") or None,
+        }
+
     async def _async_set_enabled(self, enabled: bool) -> None:
         try:
-            await self._client.async_set_port_forward_enabled(self._index, enabled)
-        except (KeeneticApiError, TimeoutError, ValueError) as err:
-            raise HomeAssistantError(f"Could not set port forwarding state: {err}") from err
-        finally:
+            rules = await self._client.async_set_port_forward_enabled(
+                self._index, enabled
+            )
+        except (KeeneticApiError, TimeoutError, ClientError, ValueError) as err:
+            # Show what the router really has now.
             await self.coordinator.async_request_refresh()
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="port_forward_set_failed",
+                translation_placeholders={"error": describe_error(err)},
+            ) from err
+        # Publish the state the router just confirmed. A requested refresh
+        # would be held back while a poll is running, and that poll read
+        # the rules before the change.
+        self.coordinator.async_set_updated_data(
+            {**self.coordinator.data, "port_forwards": rules}
+        )
 
-    async def async_turn_on(self, **kwargs: Any) -> None:
+    async def async_turn_on(self, **_: Any) -> None:
         await self._async_set_enabled(True)
 
-    async def async_turn_off(self, **kwargs: Any) -> None:
+    async def async_turn_off(self, **_: Any) -> None:
         await self._async_set_enabled(False)
 
 

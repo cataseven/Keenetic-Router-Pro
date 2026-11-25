@@ -87,6 +87,33 @@ whitespace + a second CLI command would otherwise run that command
 too. The allow-list accepts only `[A-Za-z0-9_.:/\-]` — the legitimate
 character set on this firmware family.
 
+### Port forwarding switches
+
+Turning a port forwarding switch on opens a port to the internet, so
+these switches are guarded more than the others:
+
+- They are **disabled by default**; you enable only the rules you want.
+- They are **configuration entities**. Home Assistant does not expose
+  configuration entities to Assist, LLM agents, HomeKit or Google /
+  Alexa by default, so a voice or chat command cannot open a port by
+  accident. If you expose one yourself, that is your decision.
+- They only toggle **existing** rules. A rule is addressed by the
+  index the router itself reports for it: an opaque token, checked
+  against `[0-9A-Za-z_-]{1,64}` before any request, sent only inside
+  the RCI JSON body (never into a CLI line) and re-read from the
+  router right before every toggle. The request is the same one the
+  router's own web UI sends. They never create, delete or edit a rule.
+- After a change the whole rule table is read back before the
+  configuration is saved. A change the router did not apply is
+  reported as an error and nothing is saved. If the router changed a
+  *different* rule as well, every changed rule is put back, the undo
+  is verified, and nothing is saved; if the undo cannot be verified,
+  the error names the affected rules and the switches refuse further
+  changes until the router shows them restored (fix them in the web
+  UI, or reboot the router, which loads the last saved configuration).
+- The forward target's MAC and IP are not copied into entity
+  attributes, the `list_port_forwards` response, logs or diagnostics.
+
 ### Config-flow input
 
 The router password field uses Home Assistant's password selector,

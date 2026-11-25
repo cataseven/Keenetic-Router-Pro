@@ -8,9 +8,8 @@ import logging
 import random
 from typing import Any
 
-from aiohttp import ClientSession, DummyCookieJar
 import voluptuous as vol
-
+from aiohttp import ClientError, ClientSession, DummyCookieJar
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import (
@@ -28,30 +27,31 @@ from homeassistant.exceptions import (
     ServiceValidationError,
 )
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .api import (
-    KeeneticApiError,
-    KeeneticAuthError,
     KeeneticClient,
+    KeeneticAuthError,
+    KeeneticApiError,
     KeeneticUnsupportedAuthError,
+    describe_error,
 )
 from .const import (
-    CLOUD_STARTUP_JITTER_CAP,
-    CLOUD_STARTUP_JITTER_PER_ENTRY,
-    CONF_PING_INTERVAL,
-    CONF_TRACKED_CLIENTS,
-    CONF_USE_CHALLENGE_AUTH,
+    DOMAIN,
+    DEFAULT_PORT,
+    DEFAULT_SSL,
     DATA_CLIENT,
     DATA_COORDINATOR,
     DATA_PING_COORDINATOR,
+    CONF_TRACKED_CLIENTS,
+    CONF_USE_CHALLENGE_AUTH,
+    CONF_PING_INTERVAL,
     DEFAULT_PING_INTERVAL,
-    DEFAULT_PORT,
-    DEFAULT_SSL,
-    DOMAIN,
     EVENT_NEW_DEVICE,
+    CLOUD_STARTUP_JITTER_PER_ENTRY,
+    CLOUD_STARTUP_JITTER_CAP,
 )
 from .coordinator import KeeneticCoordinator, KeeneticPingCoordinator
 
@@ -143,46 +143,7 @@ def _async_update_insecure_http_issue(
         ir.async_delete_issue(hass, DOMAIN, issue_id)
 
 
-PLATFORMS: list[str] = [
-    "sensor",
-    "switch",
-    "device_tracker",
-    "button",
-    "binary_sensor",
-    "select",
-    "update",
-    "image",
-    "number",
-]
-
-
-async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
-    """Register the read-only port forwarding action."""
-
-    async def async_list_port_forwards(call: ServiceCall) -> ServiceResponse:
-        entry_id = call.data["config_entry_id"]
-        entry_data = hass.data.get(DOMAIN, {}).get(entry_id)
-        if not entry_data:
-            raise ServiceValidationError("Select a loaded Keenetic Router Pro entry")
-        client: KeeneticClient = entry_data[DATA_CLIENT]
-        try:
-            rules = await client.async_get_port_forwards()
-        except (KeeneticApiError, TimeoutError, ValueError) as err:
-            raise HomeAssistantError(
-                "Could not read port forwarding rules from Keenetic"
-            ) from err
-        return {"rules": list(rules.values())}
-
-    hass.services.async_register(
-        DOMAIN,
-        "list_port_forwards",
-        async_list_port_forwards,
-        schema=vol.Schema(
-            {vol.Required("config_entry_id"): vol.All(str, vol.Length(min=1))}
-        ),
-        supports_response=SupportsResponse.ONLY,
-    )
-    return True
+PLATFORMS: list[str] = ["sensor", "switch", "device_tracker", "button", "binary_sensor", "select", "update", "image", "number"]
 
 
 def _is_cloud_host_entry(entry: ConfigEntry) -> bool:
@@ -236,10 +197,54 @@ def _cloud_startup_jitter(hass: HomeAssistant, entry: ConfigEntry) -> float:
     return random.uniform(0.0, window) if window > 0 else 0.0
 
 
+SERVICE_LIST_PORT_FORWARDS = "list_port_forwards"
+ATTR_CONFIG_ENTRY_ID = "config_entry_id"
+
+
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Register the integration's actions (once, for all routers)."""
+
+    async def async_list_port_forwards(call: ServiceCall) -> ServiceResponse:
+        """Read the port forwarding rules straight from the router."""
+        entry_id = call.data[ATTR_CONFIG_ENTRY_ID]
+        entry_data = hass.data.get(DOMAIN, {}).get(entry_id)
+        if not isinstance(entry_data, dict) or DATA_CLIENT not in entry_data:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="entry_not_loaded",
+            )
+        client: KeeneticClient = entry_data[DATA_CLIENT]
+        try:
+            rules = await client.async_get_port_forwards(fresh=True)
+        except (KeeneticApiError, TimeoutError, ClientError, ValueError) as err:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="port_forward_read_failed",
+                translation_placeholders={"error": describe_error(err)},
+            ) from err
+        return {
+            "rules": sorted(
+                rules.values(),
+                key=lambda r: (r["interface"], str(r["protocol"]), str(r["port"])),
+            )
+        }
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_LIST_PORT_FORWARDS,
+        async_list_port_forwards,
+        schema=vol.Schema(
+            {vol.Required(ATTR_CONFIG_ENTRY_ID): vol.All(str, vol.Length(min=1))}
+        ),
+        supports_response=SupportsResponse.ONLY,
+    )
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     data: dict[str, Any] = dict(entry.data)
 
-    host: str = data.get("host") or data.get("ip")
+    host: str = data.get("host") or data.get("ip") 
     username: str = data["username"]
     password: str = data["password"]
     port: int = int(data.get("port", DEFAULT_PORT))
@@ -349,8 +354,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await ping_coordinator.async_refresh()
         except Exception as err:  # noqa: BLE001
             _LOGGER.warning(
-                "Initial ping refresh failed (non-fatal), will retry on next cycle: %s",
-                err,
+                "Initial ping refresh failed (non-fatal), will retry on next cycle: %s", err
             )
 
     # Issue #64: async_start may have fallen back from Basic to the
@@ -404,24 +408,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         """Yeni cihaz bağlandığında event tetikle."""
         new_clients = coordinator.data.get("new_clients", set())
         clients = coordinator.data.get("clients", [])
-
+        
         for mac in new_clients:
             client_info = None
             for c in clients:
                 if str(c.get("mac") or "").lower() == mac:
                     client_info = c
                     break
-
+            
             if client_info:
-                name = (
-                    client_info.get("name")
-                    or client_info.get("hostname")
-                    or mac.upper()
-                )
+                name = client_info.get("name") or client_info.get("hostname") or mac.upper()
                 ip = client_info.get("ip")
-
+                
                 _LOGGER.info("New device connected: %s (%s) - %s", name, mac, ip)
-
+                
                 hass.bus.async_fire(
                     EVENT_NEW_DEVICE,
                     {
@@ -487,7 +487,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     entry.async_on_unload(entry.add_update_listener(async_update_listener))
-
+    
     return True
 
 

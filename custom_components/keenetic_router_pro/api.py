@@ -102,6 +102,58 @@ _TRAFFIC_COUNTER_RETRY_SECONDS = 1800.0
 _FIRMWARE_CHECK_SECONDS = 3600.0
 _FIRMWARE_CHECK_RETRY_SECONDS = 120.0
 
+# Port forwarding rules (``ip static``) change only when someone edits
+# them, so the 10-second coordinator tick is answered from a cache and
+# the router is asked once a minute (and right after a toggle).
+_PORT_FORWARD_POLL_SECONDS = 60.0
+_PORT_FORWARD_RETRY_SECONDS = 30.0
+# Every rule carries an "index": an opaque string the router derives from
+# the rule's content (short or 32 hex digits depending on firmware). It
+# survives a toggle and changes when the rule is edited. It is the only
+# identifier a rule has, so it is also what a toggle addresses. It only
+# ever travels inside JSON, never into a CLI line; the allow-list keeps
+# it safe for unique_ids too.
+_PORT_FORWARD_INDEX_RE = re.compile(r"[0-9A-Za-z_-]{1,64}")
+
+
+def _port_forward_toggle_payload(index: str, enabled: bool) -> list[dict[str, Any]]:
+    """RCI request that enables or disables one existing ``ip static`` rule.
+
+    This is exactly what the KeeneticOS 5.x web UI sends from its Port
+    Forwarding page (``toggleRule`` -> ``ipStaticApi.write`` with
+    ``propsToPopUp: ["index"]``): the index sits at the ``ip`` level, so
+    it scopes the ``ip static disable`` sub-command, and only
+    ``disable`` sits inside ``static``. Never send ``disable`` without
+    the index (the router then applies it to the LAST rule) and never
+    send ``no`` here (``ip static`` + ``no`` deletes rules).
+    """
+    if not index:
+        raise KeeneticApiError("Port forwarding rule index is empty")
+    return [{"ip": {"index": index, "static": {"disable": not enabled}}}]
+
+
+def describe_error(err: BaseException) -> str:
+    """Readable reason for an error; a bare TimeoutError has no message."""
+    try:
+        text = str(err)
+    except Exception:  # noqa: BLE001 - some library errors fail to format
+        text = ""
+    if isinstance(err, TimeoutError) and not text:
+        return "timed out talking to the router"
+    return text or type(err).__name__
+
+
+def _port_forward_disabled(value: Any) -> bool:
+    """Read a rule's ``disable`` field; absent / false / {"no": true} = on."""
+    if value is True:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "yes", "1")
+    if isinstance(value, dict):
+        # RCI sub-command object: {} = set, {"no": true} = not set.
+        return not value.get("no", False)
+    return False
+
 
 def _data_usage_to_gb(value: Any, unit: str) -> Optional[float]:
     """Convert a traffic-counter amount to GB.
@@ -240,7 +292,6 @@ class KeeneticClient:
         self._ssl = ssl
         self._request_timeout = request_timeout
         self._use_challenge_auth = use_challenge_auth
-        self._port_forward_lock = asyncio.Lock()
         # Issue #64: KeeneticOS 5.2 (release note NDM-4515, "upgraded the
         # system authentication method for the HTTP suite") rejects Basic
         # auth on the web port. A 401 there is not proof of a bad
@@ -339,6 +390,18 @@ class KeeneticClient:
         self._fw_check: Dict[str, Any] | None = None
         self._fw_check_firmware: str | None = None
         self._fw_check_next: float = 0.0
+
+        # Port forwarding rules: last answer, when to ask again, and the
+        # usual None/False/True capability flag (False = this firmware
+        # has no ``ip/static`` endpoint, never ask again). The lock keeps
+        # two toggles from interleaving their read-change-verify steps.
+        self._port_forward_supported: bool | None = None
+        self._port_forwards: Dict[str, Dict[str, Any]] | None = None
+        self._port_forwards_next: float = 0.0
+        self._port_forward_lock = asyncio.Lock()
+        # Rules a failed undo left changed: {index: disabled-before}.
+        # While set, toggles are refused (see _check_port_forward_undo_pending).
+        self._port_forward_undo_pending: Dict[str, bool] | None = None
 
         # Serialise auth refreshes. The coordinator's stage-1 fan-out
         # fires 13 RCI calls in parallel; if the session expires between
@@ -2717,79 +2780,321 @@ class KeeneticClient:
                 err,
             )
 
+    # ------------------------------------------------------------------
+    # Port forwarding (``ip static``)
+    # ------------------------------------------------------------------
 
     @staticmethod
-    def _check_port_forward_response(result: Any) -> None:
-        """Raise on nested RCI errors, even when the HTTP request succeeded."""
+    def _rci_error_message(result: Any) -> str | None:
+        """Return the first nested RCI error in ``result``, or None.
+
+        RCI answers a rejected command with HTTP 200 and a nested
+        ``{"status": [{"status": "error", "message": ...}]}`` block, so a
+        successful HTTP request is not proof the router did anything.
+        """
         if isinstance(result, dict):
             if result.get("status") == "error":
-                message = result.get("message") or result.get("code") or "unknown error"
-                raise KeeneticApiError(f"Port forwarding RCI error: {message}")
+                return str(
+                    result.get("message") or result.get("code") or "unknown error"
+                )
             for value in result.values():
-                KeeneticClient._check_port_forward_response(value)
+                message = KeeneticClient._rci_error_message(value)
+                if message is not None:
+                    return message
         elif isinstance(result, list):
             for value in result:
-                KeeneticClient._check_port_forward_response(value)
+                message = KeeneticClient._rci_error_message(value)
+                if message is not None:
+                    return message
+        return None
 
-    async def async_get_port_forwards(self) -> dict[str, dict[str, Any]]:
-        """Read configured interface-based destination port forwards by index."""
-        data = await self._rci_get("ip/static")
-        self._check_port_forward_response(data)
+    @staticmethod
+    def _port_forward_rows(data: Any) -> List[Dict[str, Any]]:
+        """Normalise the ``ip/static`` answer to a list of rule rows.
+
+        No rules may come back as ``[]``, ``{}`` or ``null``; a single
+        rule may come back as a bare object instead of a one-item list.
+        An RCI error block (HTTP 200 with ``status: error``) is a failed
+        read, not "no rules".
+        """
+        if data is None or data == {} or data == [] or data == "":
+            return []
+        if isinstance(data, dict):
+            error = KeeneticClient._rci_error_message(data)
+            if error is not None:
+                raise KeeneticApiError(f"Port forwarding read rejected: {error}")
+            if "index" in data:
+                return [data]
+            nested = data.get("static")
+            if isinstance(nested, dict) and "index" in nested:
+                return [nested]
+            if not isinstance(nested, list):
+                raise KeeneticApiError("Unexpected port forwarding response")
+            data = nested
         if not isinstance(data, list):
-            raise KeeneticApiError("Unexpected port forwarding response from Keenetic")
+            raise KeeneticApiError("Unexpected port forwarding response")
+        return [row for row in data if isinstance(row, dict)]
 
-        rules: dict[str, dict[str, Any]] = {}
-        for rule in data:
-            if not isinstance(rule, dict):
-                continue
-            index = rule.get("index")
-            port = rule.get("port")
+    @staticmethod
+    def _port_forward_states(rows: List[Dict[str, Any]]) -> Dict[str, bool]:
+        """``{index: disabled}`` for every row, including unexposed ones.
+
+        Used to check that a toggle changed the target rule and nothing
+        else, so it must also cover the rows the switch filter skips.
+        """
+        return {
+            row["index"]: _port_forward_disabled(row.get("disable"))
+            for row in rows
+            if isinstance(row.get("index"), str) and row["index"]
+        }
+
+    @staticmethod
+    def _port_forward_rules(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        """Turn rule rows into ``{index: rule}`` for the rules we expose.
+
+        Only rules this integration can safely address are kept: a valid
+        index, an interface (not an address/mask binding), a port and a
+        target host or address that is not the router itself (loopback
+        targets forward to router services such as remote management).
+        Ports arrive as strings on current firmware and are kept as
+        strings; the router omits ``to-port`` when it equals ``port``.
+        The target MAC / IP are deliberately not copied out, so they never
+        reach entity attributes, the list action or diagnostics.
+        """
+        rules: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            index = row.get("index")
+            interface = row.get("interface")
+            port = row.get("port")
+            to_address = row.get("to-address")
             if (
                 not isinstance(index, str)
-                or not re.fullmatch(r"[0-9a-fA-F]{32}", index)
-                or not rule.get("interface")
-                or not (rule.get("to-host") or rule.get("to-address"))
-                or port is None
+                or not _PORT_FORWARD_INDEX_RE.fullmatch(index)
+                or not interface
+                or port in (None, "")
+                or not (row.get("to-host") or to_address)
             ):
                 continue
-            try:
-                if ipaddress.ip_address(rule.get("to-address", "")).is_loopback:
-                    continue
-            except ValueError:
-                pass
-
-            disabled = rule.get("disable", False)
-            if not isinstance(disabled, bool):
-                raise KeeneticApiError("Unexpected port forwarding state from Keenetic")
+            if to_address:
+                try:
+                    if ipaddress.ip_address(str(to_address)).is_loopback:
+                        continue
+                except ValueError:
+                    pass
+            end_port = row.get("end-port")
+            to_port = row.get("to-port")
             rules[index] = {
                 "index": index,
-                "name": str(rule.get("comment") or ""),
-                "interface": rule["interface"],
-                "protocol": str(rule.get("protocol") or ""),
-                "port": port,
-                "end_port": rule.get("end-port"),
-                "enabled": not disabled,
+                "name": str(row.get("comment") or ""),
+                "interface": str(interface),
+                "protocol": str(row.get("protocol") or ""),
+                "port": str(port),
+                "end_port": None if end_port in (None, "") else str(end_port),
+                "to_port": None if to_port in (None, "") else str(to_port),
+                "enabled": not _port_forward_disabled(row.get("disable")),
             }
         return rules
 
-    async def async_set_port_forward_enabled(self, index: str, enabled: bool) -> None:
-        """Set a known forward, verify its running state, then save it."""
-        async with self._port_forward_lock:
-            rule = (await self.async_get_port_forwards()).get(index)
-            if rule is None:
-                raise KeeneticApiError("Port forwarding rule no longer exists")
-            if rule["enabled"] != enabled:
-                result = await self._rci_post(
-                    "", [{"ip": {"index": index, "static": {"disable": not enabled}}}]
-                )
-                self._check_port_forward_response(result)
-                rule = (await self.async_get_port_forwards()).get(index)
-                if rule is None or rule["enabled"] != enabled:
-                    raise KeeneticApiError("Keenetic did not confirm the requested state")
+    async def _async_read_port_forwards(
+        self,
+    ) -> tuple[Dict[str, Dict[str, Any]], Dict[str, bool]]:
+        """Ask the router now; refresh the cache; return (rules, all states)."""
+        rows = self._port_forward_rows(await self._rci_get("ip/static"))
+        rules = self._port_forward_rules(rows)
+        self._port_forward_supported = True
+        self._port_forwards = rules
+        self._port_forwards_next = (
+            asyncio.get_running_loop().time() + _PORT_FORWARD_POLL_SECONDS
+        )
+        return rules, self._port_forward_states(rows)
 
-            # Also save on a repeated request: a previous save could have failed.
-            result = await self._rci_post("", [{"system": {"configuration": {"save": {}}}}])
-            self._check_port_forward_response(result)
+    @property
+    def port_forwards_cache(self) -> Dict[str, Dict[str, Any]] | None:
+        """Latest rules read from the router, or None before the first answer.
+
+        The coordinator publishes this at the end of a tick, so a toggle
+        that finished while the tick was running is not overwritten with
+        the rules the tick read before it.
+        """
+        return self._port_forwards
+
+    async def async_get_port_forwards(
+        self, *, fresh: bool = False
+    ) -> Dict[str, Dict[str, Any]]:
+        """Return the router's port forwarding rules keyed by index.
+
+        Polls are served from a one-minute cache; ``fresh=True`` always
+        asks the router (the list action). A failed poll (router error,
+        timeout, garbled reply) keeps the last answer and retries in 30 s,
+        so a router blip does not make every switch unavailable; a failed
+        fresh read raises. A firmware without the endpoint is remembered
+        and never asked again, so it does not log "not found" every minute.
+        """
+        if self._port_forward_supported is False:
+            return {}
+        loop = asyncio.get_running_loop()
+        if not fresh and loop.time() < self._port_forwards_next:
+            return self._port_forwards or {}
+        try:
+            rules, _ = await self._async_read_port_forwards()
+        except (KeeneticApiError, TimeoutError, aiohttp.ClientError, ValueError) as err:
+            if (
+                isinstance(err, KeeneticApiError)
+                and self._port_forward_supported is None
+                and (_is_endpoint_missing(err) or "no such" in str(err).lower())
+            ):
+                _LOGGER.debug(
+                    "ip/static not supported on this router, caching as absent"
+                )
+                self._port_forward_supported = False
+                return {}
+            self._port_forwards_next = loop.time() + _PORT_FORWARD_RETRY_SECONDS
+            if fresh or self._port_forwards is None:
+                raise
+            _LOGGER.debug(
+                "Port forwarding read failed, keeping the last answer: %s",
+                describe_error(err),
+            )
+            return self._port_forwards
+        return rules
+
+    async def _async_send_port_forward_toggle(self, index: str, enabled: bool) -> None:
+        result = await self._rci_post("", _port_forward_toggle_payload(index, enabled))
+        error = self._rci_error_message(result)
+        if error is not None:
+            raise KeeneticApiError(f"Router rejected the port forwarding change: {error}")
+
+    def _check_port_forward_undo_pending(self, states: Dict[str, bool]) -> None:
+        """Refuse to change anything while an earlier undo is unresolved.
+
+        Unlocks as soon as the router shows those rules back in their
+        earlier state (fixed in the web UI, or the router rebooted) or the
+        rules are gone/edited (new index).
+        """
+        pending = self._port_forward_undo_pending
+        if not pending:
+            return
+        left = sorted(i for i, was in pending.items() if i in states and states[i] != was)
+        if not left:
+            self._port_forward_undo_pending = None
+            _LOGGER.info("Port forwarding rules are back in their earlier state")
+            return
+        raise KeeneticApiError(
+            "Port forwarding is locked because an earlier change could not be "
+            f"undone (rule {', '.join(left)}); fix it in the router web UI first"
+        )
+
+    async def _async_undo_port_forwards(
+        self, index: str, before: Dict[str, bool], changed: set[str]
+    ) -> None:
+        """Put every changed rule back, verify, and always raise.
+
+        Only claims "undone" after a re-read shows it. Otherwise the rules
+        still changed are remembered and further toggles are refused
+        until the router shows them restored: a later configuration save
+        from any toggle would otherwise make the wrong change permanent.
+        """
+        _LOGGER.warning(
+            "Port forwarding toggle for rule %s also changed rule(s) %s on the "
+            "router; undoing, not saving",
+            index,
+            sorted(changed - {index}),
+        )
+        for rule_index in sorted(changed):
+            try:
+                await self._async_send_port_forward_toggle(
+                    rule_index, not before[rule_index]
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:  # noqa: BLE001 - keep undoing the rest
+                _LOGGER.warning(
+                    "Could not undo port forwarding rule %s: %s",
+                    rule_index,
+                    describe_error(err),
+                )
+        try:
+            _, now = await self._async_read_port_forwards()
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:  # noqa: BLE001 - treat as "not verified"
+            _LOGGER.warning(
+                "Could not re-read port forwarding rules after the undo: %s",
+                describe_error(err),
+            )
+            now = None
+        still = sorted(
+            i for i in changed if now is None or (i in now and now[i] != before[i])
+        )
+        if still:
+            self._port_forward_undo_pending = {i: before[i] for i in still}
+            _LOGGER.error(
+                "Port forwarding rule(s) %s could not be put back on the router. "
+                "Nothing was saved, but fix them in the router web UI; port "
+                "forwarding switches refuse changes until then",
+                still,
+            )
+            raise KeeneticApiError(
+                "Router changed a different port forwarding rule and it could "
+                f"NOT be undone (rule {', '.join(still)}); nothing was saved, "
+                "fix it in the router web UI"
+            )
+        raise KeeneticApiError(
+            "Router changed a different port forwarding rule; the change was "
+            "undone and not saved"
+        )
+
+    async def async_set_port_forward_enabled(
+        self, index: str, enabled: bool
+    ) -> Dict[str, Dict[str, Any]]:
+        """Enable or disable one existing rule, verify it, save; return the rules.
+
+        1. Re-read the table: the rule may have been deleted or edited
+           (which gives it a new index) in the web UI since the last poll.
+        2. Send the change, then re-read the whole table and check that
+           exactly the target rule changed. If any other rule changed (a
+           firmware that ignored the index would hit the last rule), put
+           every changed rule back, verify that, and fail WITHOUT saving.
+           If the undo cannot be verified, further changes are refused
+           until the router shows those rules restored.
+        3. Save the configuration. The save also runs when the rule was
+           already in the requested state, because an earlier save may
+           have failed.
+        """
+        if not isinstance(index, str) or not _PORT_FORWARD_INDEX_RE.fullmatch(index):
+            raise KeeneticApiError("Invalid port forwarding rule index")
+        async with self._port_forward_lock:
+            try:
+                rules, before = await self._async_read_port_forwards()
+                self._check_port_forward_undo_pending(before)
+                rule = rules.get(index)
+                if rule is None:
+                    raise KeeneticApiError("Port forwarding rule no longer exists")
+                if rule["enabled"] != enabled:
+                    await self._async_send_port_forward_toggle(index, enabled)
+                    rules, after = await self._async_read_port_forwards()
+                    changed = {
+                        i for i, was in before.items() if i in after and after[i] != was
+                    }
+                    if changed - {index}:
+                        await self._async_undo_port_forwards(index, before, changed)
+                    rule = rules.get(index)
+                    if rule is None or rule["enabled"] != enabled:
+                        raise KeeneticApiError(
+                            "Router did not confirm the port forwarding change"
+                        )
+                result = await self._rci_parse("system configuration save")
+                error = self._rci_error_message(result)
+                if error is not None:
+                    raise KeeneticApiError(
+                        "Port forwarding changed but the configuration was "
+                        f"not saved: {error}"
+                    )
+                return rules
+            finally:
+                # Whatever happened, the next poll asks the router.
+                self._port_forwards_next = 0.0
+
 
     async def async_get_mesh_nodes(self) -> List[Dict[str, Any]]:
         """Get mesh/extender nodes status from mws/member endpoint.

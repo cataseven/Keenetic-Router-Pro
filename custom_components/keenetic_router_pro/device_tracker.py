@@ -1,5 +1,6 @@
 """Device tracker (presence) for Keenetic Router Pro."""
 from __future__ import annotations
+import logging
 from typing import Any
 # ScannerEntity must come from the package root: the
 # homeassistant.components.device_tracker.config_entry path is a
@@ -9,7 +10,9 @@ from typing import Any
 # years, so this stays compatible with older HA cores too.
 from homeassistant.components.device_tracker import ScannerEntity, SourceType
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import (
     DOMAIN,
@@ -21,6 +24,8 @@ from .const import (
 )
 from .coordinator import KeeneticCoordinator, KeeneticPingCoordinator
 from .entity import ClientEntity
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -76,14 +81,62 @@ async def async_setup_entry(
             )
         )
 
+    _async_enable_trackers_disabled_by_default(hass, entry, seen_macs)
+
     if entities:
         async_add_entities(entities)
+
+
+@callback
+def _async_enable_trackers_disabled_by_default(
+    hass: HomeAssistant, entry: ConfigEntry, macs: set[str]
+) -> None:
+    """Turn on trackers that Home Assistant registered as disabled.
+
+    Earlier releases did not override ScannerEntity's disabled-by-default,
+    so every tracker added on a recent Home Assistant was registered with
+    ``disabled_by=INTEGRATION`` and had to be enabled by hand. The user
+    chose these clients on purpose, so enable them. Only trackers of
+    clients that are still tracked are touched; one the user disabled
+    (``disabled_by=USER``) stays off. Home Assistant reloads the entry
+    once, about 30 s later, as it does whenever an entity is enabled.
+    After that nothing is left to change, so it does not repeat.
+
+    Skipped when the entry's "Enable newly added entities" system option
+    is off: Home Assistant then registers every new entity with
+    ``disabled_by=INTEGRATION`` on purpose, and that choice is the user's.
+    """
+    if entry.pref_disable_new_entities:
+        return
+    registry = er.async_get(hass)
+    wanted = {f"{entry.entry_id}_client_{mac}" for mac in macs}
+    enabled = 0
+    for reg_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if (
+            reg_entry.domain == Platform.DEVICE_TRACKER
+            and reg_entry.unique_id in wanted
+            and reg_entry.disabled_by is er.RegistryEntryDisabler.INTEGRATION
+        ):
+            registry.async_update_entity(reg_entry.entity_id, disabled_by=None)
+            enabled += 1
+    if enabled:
+        _LOGGER.info(
+            "Enabled %d device tracker(s) that Home Assistant had registered "
+            "as disabled", enabled,
+        )
 
 
 class KeeneticClientTracker(ClientEntity, ScannerEntity):
     """Device tracker entity representing a tracked client."""
     _attr_should_poll = False
     _attr_entity_category = None  # Diagnostic altında değil, ayrı göster
+    # ScannerEntity is disabled by default in Home Assistant ("most scanned
+    # network clients are not worth tracking"). Here the user picks every
+    # tracked client by hand in the setup / options flow, so a freshly
+    # added tracker must come up enabled instead of needing a manual
+    # enable. Only affects new registry entries; a tracker the user
+    # disabled stays disabled.
+    _attr_entity_registry_enabled_default = True
 
     def __init__(
         self,

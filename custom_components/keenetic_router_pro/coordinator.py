@@ -184,6 +184,11 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # (NOT the status one — same field name, different meaning).
             # Silent fetch: routers without an LTE/USB modem return {}.
             _bounded(self.client.async_get_lte_sim_slots),
+            # Port forwarding rules (``ip static``). Served from the
+            # client's one-minute cache, so this asks the router about
+            # once a minute; firmwares without the endpoint are cached
+            # as absent and never asked again. Silent like the other
+            # optional features.
             _bounded(self.client.async_get_port_forwards),
             return_exceptions=True,
         )
@@ -592,7 +597,14 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "traffic_shapes": traffic_shapes,
             "lte_data_usage": lte_data_usage,
             "lte_sim_slots": lte_sim_slots,
-            "port_forwards": port_forwards,
+            # The client's latest answer, not the stage-1 value: a toggle
+            # that finished while this tick ran has already updated it, and
+            # a failed poll falls back to the last good answer.
+            "port_forwards": (
+                self.client.port_forwards_cache
+                if self.client.port_forwards_cache is not None
+                else port_forwards
+            ),
             "usb_storage": usb_storage,
             "port_info": port_info,
             "mesh_usb": mesh_usb,
