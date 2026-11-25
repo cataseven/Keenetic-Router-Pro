@@ -6,12 +6,13 @@ import asyncio
 import ipaddress
 import logging
 import random
+import re
 from typing import Any
 
 import voluptuous as vol
 from aiohttp import ClientError, ClientSession, DummyCookieJar
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+from homeassistant.const import EVENT_HOMEASSISTANT_CLOSE
 from homeassistant.core import (
     HomeAssistant,
     ServiceCall,
@@ -33,8 +34,8 @@ from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .api import (
     KeeneticClient,
-    KeeneticAuthError,
     KeeneticApiError,
+    KeeneticCredentialsError,
     KeeneticUnsupportedAuthError,
     describe_error,
 )
@@ -75,7 +76,10 @@ def async_get_router_session(hass: HomeAssistant) -> ClientSession:
             hass.data.pop(_DATA_HTTP_SESSION)
             session.detach()
 
-        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, detach_session)
+        # CLOSE, not STOP: entries are still unloading (and may make a
+        # last request) during STOP; Home Assistant's own shared sessions
+        # are detached on CLOSE too.
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_CLOSE, detach_session)
 
     return session
 
@@ -197,6 +201,101 @@ def _cloud_startup_jitter(hass: HomeAssistant, entry: ConfigEntry) -> float:
     return random.uniform(0.0, window) if window > 0 else 0.0
 
 
+_CLIENT_DEVICE_PREFIX = "client_"
+_MAC_RE = re.compile(r"[0-9a-f]{2}(?::[0-9a-f]{2}){5}")
+
+
+def _tracked_macs(entry: ConfigEntry) -> set[str]:
+    """MACs of the clients the user currently tracks (lower case)."""
+    return {
+        str(client.get("mac") or "").lower()
+        for client in entry.data.get(CONF_TRACKED_CLIENTS, []) or []
+        if isinstance(client, dict) and client.get("mac")
+    }
+
+
+def _client_device_mac(device: Any) -> str | None:
+    """The MAC behind a tracked-client device, or None for other devices.
+
+    Client devices are identified by ``(DOMAIN, "client_aa_bb_cc_dd_ee_ff")``
+    (see ``utils.get_client_device_info``); router, mesh, WAN and crypto
+    map devices use other identifiers and are never matched here.
+    """
+    for domain, identifier in getattr(device, "identifiers", set()) or set():
+        if domain == DOMAIN and identifier.startswith(_CLIENT_DEVICE_PREFIX):
+            mac = identifier[len(_CLIENT_DEVICE_PREFIX):].replace("_", ":").lower()
+            if _MAC_RE.fullmatch(mac):
+                return mac
+    return None
+
+
+@callback
+def _async_remove_untracked_clients(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Delete the devices and entities of clients no longer tracked.
+
+    Removing a client in the options flow only changes the tracked list;
+    without this its device (tracker, sensors, buttons, ...) stayed behind
+    as "unavailable" forever. Runs on every setup, so the options-flow
+    reload cleans up straight away, and leftovers from older releases are
+    removed on the first start. Only this entry's own client devices are
+    touched.
+    """
+    tracked = _tracked_macs(entry)
+    dev_reg = dr.async_get(hass)
+    removed_devices = 0
+    for device in list(dr.async_entries_for_config_entry(dev_reg, entry.entry_id)):
+        mac = _client_device_mac(device)
+        if mac is not None and mac not in tracked:
+            if hasattr(device, "config_entry_id"):
+                # HA 2026.8+: a device has exactly one config entry; HA
+                # also removes the entities this entry has on it.
+                dev_reg.async_remove_device(device.id)
+            else:
+                # Older cores: the device may be shared with another
+                # router entry or another integration (same MAC). Take
+                # only this entry off it; HA deletes the device once no
+                # entry is left and removes only this entry's entities.
+                dev_reg.async_update_device(
+                    device.id, remove_config_entry_id=entry.entry_id
+                )
+            removed_devices += 1
+
+    # Per-client entities that lost their device earlier would survive the
+    # pass above; their unique_id is "<entry_id>_client_<mac>[_suffix]".
+    ent_reg = er.async_get(hass)
+    prefix = f"{entry.entry_id}_{_CLIENT_DEVICE_PREFIX}"
+    removed_entities = 0
+    for ent in list(er.async_entries_for_config_entry(ent_reg, entry.entry_id)):
+        unique_id = str(ent.unique_id or "")
+        if not unique_id.startswith(prefix):
+            continue
+        mac = unique_id[len(prefix):len(prefix) + 17].lower()
+        if _MAC_RE.fullmatch(mac) and mac not in tracked:
+            ent_reg.async_remove(ent.entity_id)
+            removed_entities += 1
+
+    if removed_devices or removed_entities:
+        _LOGGER.info(
+            "Removed %d device(s) and %d other entit(y/ies) of clients that are "
+            "no longer tracked",
+            removed_devices,
+            removed_entities,
+        )
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, config_entry: ConfigEntry, device_entry: Any
+) -> bool:
+    """Let the user delete a client device that is no longer tracked.
+
+    A tracked client's device would come back on the next reload, and the
+    router / mesh / WAN devices belong to the integration itself, so those
+    are refused; remove the client from the tracked list instead.
+    """
+    mac = _client_device_mac(device_entry)
+    return mac is not None and mac not in _tracked_macs(config_entry)
+
+
 SERVICE_LIST_PORT_FORWARDS = "list_port_forwards"
 ATTR_CONFIG_ENTRY_ID = "config_entry_id"
 
@@ -244,6 +343,10 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     data: dict[str, Any] = dict(entry.data)
 
+    # Before talking to the router: needs only the entry and the registries,
+    # so it also runs when the router is unreachable.
+    _async_remove_untracked_clients(hass, entry)
+
     host: str = data.get("host") or data.get("ip") 
     username: str = data["username"]
     password: str = data["password"]
@@ -273,17 +376,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "The router requires the KeeneticOS 5.2 sign-in method (NDW4) "
             f"and it could not be completed: {err}. See GitHub issue #71."
         ) from err
-    except KeeneticAuthError as err:
-        # Auth-specific failure -> raise ConfigEntryAuthFailed which
-        # HA wires automatically into the reauth flow (Repairs card
-        # + notification + the async_step_reauth handler in
-        # config_flow.py). Without this exception type the user would
-        # see a generic "integration failed to set up" with no path
-        # to fix the credentials.
+    except KeeneticCredentialsError as err:
+        # The router definitely refused the user name or password ->
+        # ConfigEntryAuthFailed, which HA wires into the reauth flow
+        # (Repairs card + notification + async_step_reauth).
         raise ConfigEntryAuthFailed(
             "Keenetic credentials were rejected"
         ) from err
     except KeeneticApiError as err:
+        # Includes the other KeeneticAuthError cases (an unexpected /auth
+        # status while the router boots, a cloud proxy answering 502/503,
+        # no challenge header): not a password verdict, so retry with
+        # backoff instead of asking the user to re-enter a correct password.
         # Connection / transport error (router unreachable, 5xx,
         # timeout) -> ConfigEntryNotReady triggers HA's retry-with-
         # backoff. Same surface as before, just typed correctly so

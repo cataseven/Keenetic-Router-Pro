@@ -12,6 +12,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import DOMAIN, DATA_COORDINATOR
 from .coordinator import KeeneticCoordinator
 from .entity import MeshEntity, ControllerEntity, WanEntity, CryptoMapEntity
+from .utils import vpn_label, vpn_prefix
 
 
 async def async_setup_entry(
@@ -65,6 +66,15 @@ async def async_setup_entry(
             KeeneticCryptoMapConnectedSensor(coordinator, entry, cmap_name)
         )
 
+    # Per-VPN-client "Connected" (issue #74): SSTP, OpenVPN, L2TP, PPTP,
+    # WireGuard, ... Tunnels created later come in through the listener.
+    known_vpn_ids: set[str] = set()
+    for iface_id in (
+        (coordinator.data.get("vpn_tunnels") or {}).get("profiles") or {}
+    ):
+        known_vpn_ids.add(iface_id)
+        entities.append(KeeneticVpnConnectedSensor(coordinator, entry, iface_id))
+
     if entities:
         async_add_entities(entities)
 
@@ -105,6 +115,15 @@ async def async_setup_entry(
                 KeeneticCryptoMapConnectedSensor(
                     coordinator, entry, cmap_name
                 )
+            )
+        for iface_id in (
+            (coordinator.data.get("vpn_tunnels") or {}).get("profiles") or {}
+        ):
+            if iface_id in known_vpn_ids:
+                continue
+            known_vpn_ids.add(iface_id)
+            new_entities.append(
+                KeeneticVpnConnectedSensor(coordinator, entry, iface_id)
             )
         if new_entities:
             async_add_entities(new_entities)
@@ -655,3 +674,67 @@ class KeeneticLteThresholdExceededSensor(_LteQuotaBinaryBase):
         if not usage:
             return None
         return bool(usage.get("threshold_exceeded"))
+
+
+class KeeneticVpnConnectedSensor(ControllerEntity, BinarySensorEntity):
+    """Whether a VPN client tunnel (SSTP, OpenVPN, L2TP, PPTP, WireGuard, ...)
+    is actually connected (issue #74).
+
+    The VPN switch shows whether the tunnel is switched on; this shows
+    whether it carries traffic. A tunnel that is on but cannot reach its
+    server, or whose ping-check failed, is off here. Rule: see
+    ``api._vpn_connected``. No addresses are exposed.
+    """
+
+    _attr_has_entity_name = True
+    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+
+    def __init__(
+        self, coordinator: KeeneticCoordinator, entry: ConfigEntry, iface_id: str
+    ) -> None:
+        ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
+        self._iface_id = iface_id
+        profiles = self._profiles
+        profile = profiles.get(iface_id) or {}
+        self._attr_name = (
+            f"{vpn_prefix(profile.get('type'))} - "
+            f"{vpn_label(profiles, iface_id)} Connected"
+        )
+
+    @property
+    def _profiles(self) -> dict[str, Any]:
+        vpn = self.coordinator.data.get("vpn_tunnels") or {}
+        return vpn.get("profiles") or {}
+
+    @property
+    def _profile(self) -> dict[str, Any] | None:
+        profile = self._profiles.get(self._iface_id)
+        return profile if isinstance(profile, dict) else None
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._entry_id}_vpn_{self._iface_id}_connected"
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._profile is not None
+
+    @property
+    def is_on(self) -> bool | None:
+        profile = self._profile
+        return None if profile is None else profile.get("connected")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        profile = self._profile
+        if profile is None:
+            return None
+        return {
+            "interface_id": self._iface_id,
+            "type": profile.get("type"),
+            "enabled": profile.get("enabled"),
+            "link": profile.get("link"),
+            "via": profile.get("via"),
+            "fail": profile.get("fail"),
+            "layers": profile.get("layers"),
+        }

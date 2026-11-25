@@ -8,6 +8,7 @@ from datetime import timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import KeeneticClient
@@ -22,6 +23,10 @@ from .const import (
 import logging
 
 _LOGGER = logging.getLogger(f"custom_components.{DOMAIN}.coordinator")
+
+# How long a failed SSTP server read may be bridged with the last answer
+# before the sessions sensor goes unavailable (issue #74).
+_SSTP_STALE_SECONDS = 120.0
 
 # ICMP ping için icmplib kullanıyoruz (Home Assistant Ping entegrasyonu gibi)
 try:
@@ -54,10 +59,18 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             update_interval=timedelta(seconds=scan_interval),
         )
         self.client = client
+        # Set while reading the SSTP server keeps failing (loop time).
+        self._sstp_fail_since: float | None = None
         # Issue #69: device registry id of the router device. Written by
         # async_setup_entry before platforms are forwarded, so every
         # sub-device entity can link itself with ``via_device_id``.
         self.main_device_id: str | None = None
+
+    def _raise_if_credentials_rejected(self) -> None:
+        if getattr(self.client, "credentials_rejected", False):
+            raise ConfigEntryAuthFailed(
+                "The router rejected the user name or password"
+            )
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch all router data with bounded, staged parallelism.
@@ -105,6 +118,9 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             async with sem:
                 return await func(*args, **kwargs)
  
+        # Nothing to ask the router while it refuses our credentials.
+        self._raise_if_credentials_rejected()
+
         # Collected per-tick so we can emit a single warning instead of
         # silently defaulting every failing fetch at debug level.
         failed_fetches: list[tuple[str, BaseException]] = []
@@ -223,6 +239,13 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "crypto_maps", crypto_maps, {}, silent=True
         )
 
+        # The router refused the user name or password during this tick
+        # (typically: the password was changed on the router). Ask the
+        # user for new credentials; Home Assistant stops polling until
+        # then, and the client no longer tries to sign in, so a wrong
+        # password is not retried against the router's brute-force ban.
+        self._raise_if_credentials_rejected()
+
         # Fail-fast on critical fetches. If the router is unreachable,
         # auth has expired, or the RCI surface is down, ``system_info``
         # and ``interfaces`` are the two calls that MUST succeed — every
@@ -258,6 +281,32 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         merged_system["fw-update-available"] = version_available.get(
             "update-available", False
         )
+
+        # Issue #74: sessions of the router's own SSTP VPN server. Asked
+        # only when the firmware lists the "sstp-server" component, so
+        # other routers never see the request. A transient failure keeps
+        # the last answer instead of turning the sensor unavailable.
+        ndw = merged_system.get("ndw")
+        loop = asyncio.get_running_loop()
+        try:
+            sstp_server = await self.client.async_get_sstp_server(
+                ndw.get("components") if isinstance(ndw, dict) else None
+            )
+        except Exception as err:  # noqa: BLE001
+            # Keep the last answer through a short blip only: a session
+            # list that silently stays "current" would hide exactly the
+            # disconnect the user wants to be told about.
+            if self._sstp_fail_since is None:
+                self._sstp_fail_since = loop.time()
+                _LOGGER.info("Reading the SSTP server sessions failed: %r", err)
+            if loop.time() - self._sstp_fail_since < _SSTP_STALE_SECONDS:
+                sstp_server = (self.data or {}).get("sstp_server")
+            else:
+                sstp_server = None
+        else:
+            if self._sstp_fail_since is not None:
+                _LOGGER.info("Reading the SSTP server sessions works again")
+            self._sstp_fail_since = None
  
         # ---------- Stage 2: depends on stage-1 `interfaces` ----------
         # All of these accept a pre-fetched ``interfaces=`` argument so
@@ -600,6 +649,7 @@ class KeeneticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # The client's latest answer, not the stage-1 value: a toggle
             # that finished while this tick ran has already updated it, and
             # a failed poll falls back to the last good answer.
+            "sstp_server": sstp_server,
             "port_forwards": (
                 self.client.port_forwards_cache
                 if self.client.port_forwards_cache is not None

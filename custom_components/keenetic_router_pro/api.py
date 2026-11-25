@@ -6,7 +6,6 @@ from typing import Any, Optional, Dict, List
 from homeassistant.exceptions import HomeAssistantError
 
 import aiohttp
-import async_timeout
 import asyncio
 import base64
 import hashlib
@@ -102,10 +101,20 @@ _TRAFFIC_COUNTER_RETRY_SECONDS = 1800.0
 _FIRMWARE_CHECK_SECONDS = 3600.0
 _FIRMWARE_CHECK_RETRY_SECONDS = 120.0
 
+# After the router refused every sign-in it offers for a reason other than
+# the password (KeeneticUnsupportedAuthError: NDW4 broke and the NDW2
+# rescue was refused), wait this long before trying again. Each attempt
+# costs failed logins towards the router's brute-force ban.
+_UNSUPPORTED_SIGN_IN_RETRY_SECONDS = 300.0
+
 # Port forwarding rules (``ip static``) change only when someone edits
 # them, so the 10-second coordinator tick is answered from a cache and
 # the router is asked once a minute (and right after a toggle).
 _PORT_FORWARD_POLL_SECONDS = 60.0
+# Optional endpoints the router said it does not have (USB storage, issue
+# #80; SSTP server, issue #74) are checked again this often: one router log
+# line an hour instead of 360.
+_ABSENT_RECHECK_SECONDS = 3600.0
 _PORT_FORWARD_RETRY_SECONDS = 30.0
 # Every rule carries an "index": an opaque string the router derives from
 # the rule's content (short or 32 hex digits depending on firmware). It
@@ -132,6 +141,16 @@ def _port_forward_toggle_payload(index: str, enabled: bool) -> list[dict[str, An
     return [{"ip": {"index": index, "static": {"disable": not enabled}}}]
 
 
+def _copy_sign_in_error(err: BaseException) -> Exception:
+    """A fresh exception of the same kind, for callers sharing one attempt."""
+    if isinstance(err, KeeneticApiError):
+        try:
+            return type(err)(str(err))
+        except Exception:  # noqa: BLE001
+            pass
+    return KeeneticApiError(f"Sign-in failed: {describe_error(err)}")
+
+
 def describe_error(err: BaseException) -> str:
     """Readable reason for an error; a bare TimeoutError has no message."""
     try:
@@ -141,6 +160,56 @@ def describe_error(err: BaseException) -> str:
     if isinstance(err, TimeoutError) and not text:
         return "timed out talking to the router"
     return text or type(err).__name__
+
+
+def _vpn_connected(item: Dict[str, Any]) -> Optional[bool]:
+    """Whether a VPN client interface is actually connected (issue #74).
+
+    Same rule as the KeeneticOS 5.x web UI: every present layer among
+    conf / link / ctrl must be "running", and the IP layer must be up
+    (ipv4 or ipv6 "running"; no IP layer at all counts as up). ``state``
+    is the admin switch and stays "up" while the tunnel is down, and a
+    WireGuard tunnel keeps its static address while disconnected, so
+    neither is used. Without ``summary.layer`` (old firmware) fall back to
+    link == "up" and connected != "no"; None when nothing says either way.
+    """
+    summary = item.get("summary")
+    layers = summary.get("layer") if isinstance(summary, dict) else None
+    if isinstance(layers, dict) and layers:
+        for key in ("conf", "link", "ctrl"):
+            if key in layers and str(layers[key]).lower() != "running":
+                return False
+        ip_layers = [layers[k] for k in ("ipv4", "ipv6") if k in layers]
+        if not ip_layers:
+            return True
+        return any(str(v).lower() == "running" for v in ip_layers)
+    link = item.get("link")
+    connected = item.get("connected")
+    if link is None and connected is None:
+        return None
+    if connected is False or str(connected).lower() == "no":
+        return False
+    return str(link or "").lower() == "up"
+
+
+def _component_set(components: Any) -> Optional[set]:
+    """Installed firmware components from show/version ``ndw.components``.
+
+    A comma-separated string on current firmware; None when not reported.
+    """
+    if isinstance(components, str):
+        return {c.strip().lower() for c in components.split(",") if c.strip()}
+    if isinstance(components, (list, tuple, set)):
+        return {str(c).strip().lower() for c in components if str(c).strip()}
+    return None
+
+
+def _truthy(value: Any) -> Optional[bool]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("yes", "true", "1", "on", "up", "enabled")
 
 
 def _port_forward_disabled(value: Any) -> bool:
@@ -214,25 +283,23 @@ def _validate_cli_arg(value: str, label: str) -> str:
 
 
 def _is_endpoint_missing(err: BaseException) -> bool:
-    """Return True if ``err`` looks like a "router doesn't have this endpoint".
+    """Return True only if the router itself said "this endpoint does not exist".
 
-    Two shapes we treat as equivalent to "feature absent":
-
-    1. HTTP 404 from ``_request`` — wrapped in a ``KeeneticApiError``
-       whose message contains ``"HTTP error 404"``.
-    2. The router's RCI "not found" string returned by ``/rci/parse``
-       or some show endpoints when the feature module isn't loaded.
-
-    Anything else (5xx, timeouts, malformed JSON, transient connection
-    errors) is a real fault, not a missing feature, and must NOT
-    suppress future calls.
+    That is an HTTP 404 for the RCI path (``KeeneticEndpointMissingError``
+    from ``_request``), or an RCI "not found" / "no such" block that a
+    caller turned into that error. The decision is never taken from
+    message text alone: a DNS failure ("Domain name not found"), a port
+    that contains 404, or a failed sign-in shared by every request of a
+    poll ("Auth failed (status 404)") is a real fault, not a missing
+    feature, and must NOT disable a feature (issue #80 review). Anything
+    else (5xx, timeouts, malformed JSON, connection errors) likewise.
     """
-    msg = str(err).lower()
-    if "404" in msg:
+    if isinstance(err, KeeneticEndpointMissingError):
         return True
-    if "not found" in msg:
-        return True
-    return False
+    if isinstance(err, KeeneticAuthError):
+        return False
+    # Any other producer of the router's own 404 text, same wording.
+    return str(err).startswith("HTTP error 404 for ")
 
 
 def _auth_scheme_names(headers: Any) -> List[str]:
@@ -253,12 +320,68 @@ def _auth_scheme_names(headers: Any) -> List[str]:
     return [str(v).split(None, 1)[0] for v in values if v and str(v).strip()]
 
 
+def _rotated_session_cookie(headers: Any, handshake_cookie: Optional[str]) -> Optional[str]:
+    """The session cookie a sign-in reply replaced, if it replaced it.
+
+    Some firmware sets a fresh session cookie on the successful NDW2 POST.
+    Only a cookie with the handshake cookie's name counts: the same reply
+    may also set unrelated cookies (language, UI state), and taking the
+    first one blindly would replace a valid session with one of those.
+    Without a handshake cookie, the first cookie the reply sets is used.
+    """
+    getall = getattr(headers, "getall", None)
+    values = list(getall("Set-Cookie", [])) if getall else (
+        [headers.get("Set-Cookie")] if headers.get("Set-Cookie") else []
+    )
+    pairs = [
+        pair
+        for pair in ((raw or "").split(";", 1)[0].strip() for raw in values)
+        if "=" in pair
+    ]
+    if not handshake_cookie:
+        return pairs[0] if pairs else None
+    name = handshake_cookie.split("=", 1)[0]
+    for pair in pairs:
+        if pair.split("=", 1)[0] == name:
+            return pair
+    return None
+
+
 class KeeneticApiError(Exception):
     """Base API error."""
 
 
+class KeeneticEndpointMissingError(KeeneticApiError):
+    """The router says this RCI endpoint does not exist (feature not installed).
+
+    Raised for an HTTP 404 on the RCI path, or for an RCI "not found" /
+    "no such command" block. Capability caches key off this type only.
+    """
+
+
 class KeeneticAuthError(KeeneticApiError):
     """Authentication failed."""
+
+
+class KeeneticCredentialsError(KeeneticAuthError):
+    """The router definitely refused the user name or password.
+
+    Raised only where the router's answer leaves no other reading: the
+    final Basic 401 (after the interactive fallback was tried), an NDW4
+    password/user rejection, and an NDW2 401 on a router that offers
+    only NDW2. Protocol trouble, unexpected statuses and transport
+    errors stay plain ``KeeneticAuthError`` / ``KeeneticApiError``.
+    Once seen, the client stops signing in (see ``_async_sign_in``):
+    retrying a wrong password only feeds the router's brute-force ban.
+    """
+
+
+class KeeneticNoInteractiveAuthError(KeeneticAuthError):
+    """The router has no interactive sign-in (no /auth, or no challenge).
+
+    Tells the Basic fallback that Basic is the router's only scheme, so a
+    Basic 401 there is a password verdict. Not itself a password error.
+    """
 
 
 class KeeneticUnsupportedAuthError(KeeneticAuthError):
@@ -373,6 +496,15 @@ class KeeneticClient:
         # learn the endpoint isn't on this firmware, stop calling it.
         self._dns_proxy_supported: bool | None = None
         self._ipsec_diagnostics_supported: bool | None = None
+        # Issue #80 (the "media" part of #2): USB storage endpoints. A
+        # router without the USB storage component has no show/media and
+        # logs `not found: "media"` for every request -- about 30 % of a
+        # 4000-line router log at the 10 s poll. An endpoint that answered
+        # "not found" is skipped and checked again once an hour
+        # (endpoint or "mesh:<node>" -> loop time of the next check), so a
+        # component installed later, or one still loading while the
+        # router booted, comes back without a reload.
+        self._absent_until: Dict[str, float] = {}
 
         # Sprint 6 (issue #49): per-interface "doesn't exist on this
         # router" cache. Populated when `show/interface/<id>` returns
@@ -383,6 +515,16 @@ class KeeneticClient:
         # log errors per non-existent AP — pavlozelinskyi observed
         # 3,900 errors in 1.5 hours from this single bug.
         self._missing_interface_paths: set[str] = set()
+
+        # Set once the router definitely refused the user name or password
+        # (see _async_sign_in); never cleared on this client.
+        self._credentials_rejected: KeeneticCredentialsError | None = None
+        # One sign-in attempt at a time is shared by everyone who was
+        # waiting for it (see _ensure_auth / _reauth_after_401): finished
+        # attempts are counted, and the last failure is kept to hand out.
+        self._sign_in_attempts = 0
+        self._last_sign_in_error: Exception | None = None
+        self._sign_in_blocked_until = 0.0
 
         # Last successful firmware update check, the firmware it was made
         # for, and when to ask the router again. See
@@ -456,10 +598,70 @@ class KeeneticClient:
     async def async_start(self, session: aiohttp.ClientSession) -> None:
         """Attach an aiohttp session and authenticate."""
         self._session = session
-        if self._use_challenge_auth:
-            await self._async_authenticate_challenge()
+        await self._async_sign_in()
+
+    @property
+    def credentials_rejected(self) -> bool:
+        """True once the router refused the user name or password."""
+        return self._credentials_rejected is not None
+
+    async def _async_sign_in(self) -> None:
+        """Sign in with the current scheme; stop for good on a wrong password.
+
+        After a password change on the router, every request of a poll
+        used to start its own sign-in, and each one failed: about 18
+        failed logins every 10 seconds, enough for the router's
+        brute-force protection to ban Home Assistant. Now the first
+        definite rejection is remembered and every later request fails
+        at once without contacting the router; the coordinator turns it
+        into a reauthentication request. A new client (after the user
+        re-enters the password) starts clean.
+        """
+        if self._credentials_rejected is not None:
+            raise KeeneticCredentialsError(str(self._credentials_rejected))
+        loop = asyncio.get_running_loop()
+        if (
+            self._last_sign_in_error is not None
+            and loop.time() < self._sign_in_blocked_until
+        ):
+            raise _copy_sign_in_error(self._last_sign_in_error)
+        try:
+            if self._use_challenge_auth:
+                await self._async_authenticate_challenge()
+            else:
+                await self._async_authenticate()
+        except KeeneticCredentialsError as err:
+            self._credentials_rejected = err
+            self._last_sign_in_error = err
+            _LOGGER.error(
+                "Keenetic router %s:%s rejected the user name or password; not "
+                "signing in again until the credentials are updated",
+                self._host,
+                self._port,
+            )
+            raise
+        except KeeneticUnsupportedAuthError as err:
+            self._last_sign_in_error = err
+            self._sign_in_blocked_until = loop.time() + _UNSUPPORTED_SIGN_IN_RETRY_SECONDS
+            _LOGGER.warning(
+                "Keenetic router %s:%s: sign-in could not be completed (%s); "
+                "trying again in %d minutes",
+                self._host,
+                self._port,
+                err,
+                int(_UNSUPPORTED_SIGN_IN_RETRY_SECONDS // 60),
+            )
+            raise
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:  # noqa: BLE001 - shared with the waiters
+            self._last_sign_in_error = err
+            raise
         else:
-            await self._async_authenticate()
+            self._last_sign_in_error = None
+            self._sign_in_blocked_until = 0.0
+        finally:
+            self._sign_in_attempts += 1
 
     async def _async_authenticate(self) -> None:
         """Perform Basic auth against /rci/, like original ha_keenetic."""
@@ -475,7 +677,7 @@ class KeeneticClient:
         _LOGGER.debug("Authenticating to Keenetic via %s", url)
 
         try:
-            async with async_timeout.timeout(self._request_timeout):
+            async with asyncio.timeout(self._request_timeout):
                 resp = await self._session.get(url, headers=headers)
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             # A transport failure says nothing about the credentials.
@@ -491,14 +693,34 @@ class KeeneticClient:
         # telling the user their credentials are invalid; if that
         # handshake also fails it raises its own, more specific error.
         if resp.status == 401 and not self._basic_fallback_tried:
-            self._basic_fallback_tried = True
             _LOGGER.info(
                 "Basic auth rejected by %s:%s (HTTP 401) — retrying with "
                 "the router's interactive sign-in (NDW4 or NDW2)",
                 self._host,
                 self._port,
             )
-            await self._async_authenticate_challenge()
+            # The fallback is spent only once it gave a verdict. A timeout,
+            # a 5xx or an NDW4 hiccup says nothing, so the next sign-in
+            # tries it again instead of reading Basic's 401 as "wrong
+            # password" (e.g. a router upgraded to 5.2 while HA runs).
+            try:
+                await self._async_authenticate_challenge()
+            except KeeneticCredentialsError:
+                self._basic_fallback_tried = True
+                raise
+            except KeeneticUnsupportedAuthError:
+                # The router wants NDW4: stay on the interactive sign-in.
+                self._basic_fallback_tried = True
+                self._use_challenge_auth = True
+                raise
+            except KeeneticNoInteractiveAuthError as err:
+                # Basic is the only sign-in this router has, and it said 401.
+                self._basic_fallback_tried = True
+                raise KeeneticCredentialsError(
+                    "Basic auth rejected (HTTP 401) and the router offers no "
+                    "other sign-in"
+                ) from err
+            self._basic_fallback_tried = True
             # Remember the scheme that worked so re-auth after a later
             # 401 goes straight down the challenge path.
             self._use_challenge_auth = True
@@ -506,6 +728,12 @@ class KeeneticClient:
 
         if resp.status != 200:
             text = await resp.text()
+            if resp.status == 401:
+                # The fallback already gave its verdict: the password was
+                # refused, or the router has no other sign-in.
+                raise KeeneticCredentialsError(
+                    f"Auth failed (status {resp.status}): {text}"
+                )
             raise KeeneticAuthError(
                 f"Auth failed (status {resp.status}): {text}"
             )
@@ -568,6 +796,10 @@ class KeeneticClient:
             status, headers, cookie = probe or await self._async_auth_probe(
                 auth_url
             )
+            if status == 404:
+                raise KeeneticNoInteractiveAuthError(
+                    "Router has no interactive sign-in (GET /auth: 404)"
+                )
             if status not in (200, 401):
                 raise KeeneticAuthError(
                     f"Unexpected status during challenge GET ({status})"
@@ -582,7 +814,7 @@ class KeeneticClient:
                 cookie = await self._async_ndw4_sign_in(base, endpoint, cookie)
                 return cookie, "NDW4"
             except ndw4.Ndw4CredentialsError as err:
-                raise KeeneticAuthError(f"NDW4 sign-in rejected: {err}") from err
+                raise KeeneticCredentialsError(f"NDW4 sign-in rejected: {err}") from err
             except ndw4.Ndw4Error as err:
                 ndw4_error = err
 
@@ -613,7 +845,7 @@ class KeeneticClient:
         self, auth_url: str
     ) -> tuple[int, Any, Optional[str]]:
         """GET /auth: the router's sign-in offer and a fresh session cookie."""
-        async with async_timeout.timeout(self._request_timeout):
+        async with asyncio.timeout(self._request_timeout):
             async with self._session.get(auth_url, allow_redirects=False) as resp:
                 await resp.read()
                 status = resp.status
@@ -690,7 +922,7 @@ class KeeneticClient:
         realm = headers.get("X-NDM-Realm", "")
 
         if not challenge:
-            raise KeeneticAuthError(
+            raise KeeneticNoInteractiveAuthError(
                 "Router did not return X-NDM-Challenge header. "
                 "This model may not support Challenge Auth — "
                 "try disabling 'Challenge Auth' and use Basic Auth instead."
@@ -714,7 +946,7 @@ class KeeneticClient:
 
         _LOGGER.debug("NDW2 challenge: POST %s", auth_url)
 
-        async with async_timeout.timeout(self._request_timeout):
+        async with asyncio.timeout(self._request_timeout):
             async with self._session.post(
                 auth_url,
                 json=payload,
@@ -732,14 +964,18 @@ class KeeneticClient:
         )
 
         if status == 401:
-            raise KeeneticAuthError(
+            # Only reached directly when the router offers NDW2 alone; the
+            # NDW4-broke-try-NDW2 rescue path wraps this into
+            # KeeneticUnsupportedAuthError, so it never counts as a
+            # password rejection there.
+            raise KeeneticCredentialsError(
                 "Challenge auth rejected — wrong credentials, or the router "
                 "no longer accepts the NDW2 handshake"
             )
         if status not in (200, 204):
             raise KeeneticAuthError(f"Challenge auth failed (status={status})")
 
-        return ndw4.session_cookie(reply_headers) or cookie
+        return _rotated_session_cookie(reply_headers, cookie) or cookie
 
     async def _ensure_auth(self) -> None:
         """Ensure we are authenticated before making an RCI call.
@@ -759,13 +995,14 @@ class KeeneticClient:
         """
         if self._authenticated:
             return
+        attempts = self._sign_in_attempts
         async with self._auth_lock:
             if self._authenticated:
                 return
-            if self._use_challenge_auth:
-                await self._async_authenticate_challenge()
-            else:
-                await self._async_authenticate()
+            if self._sign_in_attempts != attempts and self._last_sign_in_error:
+                # An attempt finished while we waited and failed: share it.
+                raise _copy_sign_in_error(self._last_sign_in_error)
+            await self._async_sign_in()
 
     async def _reauth_after_401(self, stale_generation: int) -> None:
         """Re-authenticate after a 401, exactly once across concurrent callers.
@@ -779,15 +1016,17 @@ class KeeneticClient:
         the bumped generation and return immediately so the caller can
         retry with the cookie that the winner just refreshed.
         """
+        attempts = self._sign_in_attempts
         async with self._auth_lock:
             if self._auth_generation != stale_generation:
                 # Someone already refreshed since our request was sent.
                 return
+            if self._sign_in_attempts != attempts and self._last_sign_in_error:
+                # The re-auth another 401 started failed: share its result
+                # instead of signing in again (each try may be a failed login).
+                raise _copy_sign_in_error(self._last_sign_in_error)
             self._authenticated = False
-            if self._use_challenge_auth:
-                await self._async_authenticate_challenge()
-            else:
-                await self._async_authenticate()
+            await self._async_sign_in()
             self._auth_generation += 1
 
     async def _request(
@@ -852,7 +1091,7 @@ class KeeneticClient:
                     self._last_request_monotonic = loop.time()
 
             try:
-                async with async_timeout.timeout(self._request_timeout):
+                async with asyncio.timeout(self._request_timeout):
                     resp = await self._session.request(
                         method,
                         url,
@@ -867,6 +1106,10 @@ class KeeneticClient:
                 text = await resp.text()
             elif resp.status >= 400:
                 text = await resp.text()
+                if resp.status == 404:
+                    raise KeeneticEndpointMissingError(
+                        f"HTTP error 404 for {path}: {text}"
+                    )
                 raise KeeneticApiError(
                     f"HTTP error {resp.status} for {path}: {text}"
                 )
@@ -1944,6 +2187,8 @@ class KeeneticClient:
             conf = str(layer.get("conf") or "").lower()
 
             enabled = not (conf == "disabled" or state == "down")
+            connected = _vpn_connected(item)
+            raw_layers = layer if isinstance(layer, dict) else {}
 
             profiles[str(iface_id)] = {
                 "id": iface_id,
@@ -1951,9 +2196,86 @@ class KeeneticClient:
                 "label": str(label),
                 "enabled": enabled,
                 "state": item.get("state"),
+                # Issue #74: "enabled" says the tunnel is switched on;
+                # "connected" says it actually carries traffic.
+                "connected": connected,
+                "link": item.get("link"),
+                "via": item.get("via") or None,
+                "fail": item.get("fail"),
+                "layers": {
+                    k: raw_layers.get(k)
+                    for k in ("conf", "link", "ipv4", "ipv6", "ctrl")
+                    if k in raw_layers
+                },
+                # Seconds since the session came up, as the router reports
+                # it (it omits it while a tunnel is down). Not tied to
+                # "connected": a ping-check failure takes the IP layer down
+                # while the session, and its uptime, carry on. No addresses
+                # are copied out.
+                "uptime": safe_int(item.get("uptime")),
             }
 
         return {"profiles": profiles}
+
+    async def async_get_sstp_server(
+        self, components: Any = None
+    ) -> Dict[str, Any] | None:
+        """Sessions of the router's own SSTP VPN server (issue #74).
+
+        Returns None when the router has no SSTP server. It is asked only
+        when the firmware lists the "sstp-server" component
+        (show/version ``ndw.components``); when that list is missing, it is
+        asked and a "not found" answer is remembered for an hour, so a
+        router without the server does not log 'not found' every poll (the
+        #80 lesson). A transient failure raises; the caller keeps the last
+        answer. Usernames and pool addresses are kept, the KeenDNS name
+        and anything else in the header are not.
+        """
+        listed = _component_set(components)
+        if listed is not None and "sstp-server" not in listed:
+            return None
+        key = "show/sstp-server"
+        if self._endpoint_absent(key):
+            return None
+        try:
+            data = await self._rci_get(key)
+        except KeeneticApiError as err:
+            if _is_endpoint_missing(err):
+                self._mark_endpoint(key, False)
+                return None
+            raise
+        if self._is_missing_reply(data):
+            self._mark_endpoint(key, False)
+            return None
+        error = self._rci_error_message(data)
+        if error is not None:
+            # Any other in-band error (busy, access denied, ...) is a failed
+            # read, not "server on, nobody connected"; the caller keeps the
+            # last answer instead of reporting every client as gone.
+            raise KeeneticApiError(f"show/sstp-server rejected: {error}")
+        self._mark_endpoint(key, True)
+        if not isinstance(data, dict):
+            return {"enabled": None, "sessions": []}
+
+        tunnels = data.get("tunnel")
+        if isinstance(tunnels, dict):
+            # One session may come back unwrapped, or keyed by session id.
+            tunnels = [tunnels] if (
+                "username" in tunnels or "clientaddress" in tunnels
+            ) else [v for v in tunnels.values() if isinstance(v, dict)]
+        if not isinstance(tunnels, list):
+            tunnels = []
+        sessions = []
+        for tunnel in tunnels:
+            if not isinstance(tunnel, dict):
+                continue
+            sessions.append({
+                "username": str(tunnel.get("username") or ""),
+                "client_address": tunnel.get("clientaddress")
+                or tunnel.get("client-address"),
+                "uptime": safe_int(tunnel.get("uptime")),
+            })
+        return {"enabled": _truthy(data.get("enabled")), "sessions": sessions}
 
     async def async_get_wan_status(
         self, interfaces: Dict[str, Any] | None = None
@@ -2784,6 +3106,28 @@ class KeeneticClient:
     # Port forwarding (``ip static``)
     # ------------------------------------------------------------------
 
+    def _endpoint_absent(self, key: str) -> bool:
+        until = self._absent_until.get(key)
+        return until is not None and asyncio.get_running_loop().time() < until
+
+    def _mark_endpoint(self, key: str, present: bool) -> None:
+        if present:
+            self._absent_until.pop(key, None)
+            return
+        _LOGGER.debug("%s not found on the router; checking again in an hour", key)
+        self._absent_until[key] = (
+            asyncio.get_running_loop().time() + _ABSENT_RECHECK_SECONDS
+        )
+
+    @staticmethod
+    def _is_missing_reply(result: Any) -> bool:
+        """True for an RCI error block saying the command does not exist."""
+        message = KeeneticClient._rci_error_message(result)
+        if message is None:
+            return False
+        message = message.lower()
+        return "not found" in message or "no such" in message
+
     @staticmethod
     def _rci_error_message(result: Any) -> str | None:
         """Return the first nested RCI error in ``result``, or None.
@@ -2822,6 +3166,11 @@ class KeeneticClient:
         if isinstance(data, dict):
             error = KeeneticClient._rci_error_message(data)
             if error is not None:
+                lowered = error.lower()
+                if "not found" in lowered or "no such" in lowered:
+                    raise KeeneticEndpointMissingError(
+                        f"Port forwarding read rejected: {error}"
+                    )
                 raise KeeneticApiError(f"Port forwarding read rejected: {error}")
             if "index" in data:
                 return [data]
@@ -2938,11 +3287,7 @@ class KeeneticClient:
         try:
             rules, _ = await self._async_read_port_forwards()
         except (KeeneticApiError, TimeoutError, aiohttp.ClientError, ValueError) as err:
-            if (
-                isinstance(err, KeeneticApiError)
-                and self._port_forward_supported is None
-                and (_is_endpoint_missing(err) or "no such" in str(err).lower())
-            ):
+            if self._port_forward_supported is None and _is_endpoint_missing(err):
                 _LOGGER.debug(
                     "ip/static not supported on this router, caching as absent"
                 )
@@ -3256,12 +3601,15 @@ class KeeneticClient:
         safe_node_host = format_host_for_url(node_ip)
         if not self._session or not self._auth_header or not safe_node_host:
             return devices
+        node_key = f"mesh:{node_cid or node_ip}"
+        if self._endpoint_absent(node_key):
+            return devices
 
         scheme = "https" if self._ssl else "http"
         url = f"{scheme}://{safe_node_host}:{self._port}{RCI_ROOT}/system/usb"
 
         try:
-            async with async_timeout.timeout(self._request_timeout):
+            async with asyncio.timeout(self._request_timeout):
                 resp = await self._session.post(
                     url,
                     json={},
@@ -3274,6 +3622,11 @@ class KeeneticClient:
                     "member may use different credentials",
                     node_name, node_ip,
                 )
+                return devices
+
+            if resp.status == 404:
+                # The node has no USB support (issue #80).
+                self._mark_endpoint(node_key, False)
                 return devices
 
             if resp.status >= 400:
@@ -3292,6 +3645,10 @@ class KeeneticClient:
 
             if not data:
                 return devices
+            if self._is_missing_reply(data):
+                self._mark_endpoint(node_key, False)
+                return devices
+            self._mark_endpoint(node_key, True)
 
             _LOGGER.debug(
                 "Mesh node %s (%s) USB response: %s",
@@ -3486,18 +3843,34 @@ class KeeneticClient:
         devices: List[Dict[str, Any]] = []
 
         # 1) Try system/usb first (kept for compatibility)
-        try:
-            data = await self._rci_post("system/usb", {})
-            devices = self._parse_system_usb_response(data)
-        except Exception as err:
-            _LOGGER.debug("system/usb failed: %s", err)
+        if not self._endpoint_absent("system/usb"):
+            try:
+                data = await self._rci_post("system/usb", {})
+                if self._is_missing_reply(data):
+                    self._mark_endpoint("system/usb", False)
+                else:
+                    self._mark_endpoint("system/usb", True)
+                    devices = self._parse_system_usb_response(data)
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:  # noqa: BLE001
+                if _is_endpoint_missing(err):
+                    self._mark_endpoint("system/usb", False)
+                else:
+                    _LOGGER.debug("system/usb failed: %s", err)
 
-        # 2) If empty, fallback to show/media (+show/usb)
-        if not devices:
+        # 2) If empty, fallback to show/media (+show/usb), unless the router
+        #    recently said it has no show/media (issue #80).
+        if not devices and not self._endpoint_absent("show/media"):
             try:
                 devices = await self._parse_show_media_usb()
-            except Exception as err:
-                _LOGGER.debug("show/media fallback failed: %s", err)
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:  # noqa: BLE001
+                if _is_endpoint_missing(err):
+                    self._mark_endpoint("show/media", False)
+                else:
+                    _LOGGER.debug("show/media fallback failed: %s", err)
 
         return devices
 
@@ -3538,11 +3911,25 @@ class KeeneticClient:
     async def _parse_show_media_usb(self) -> List[Dict[str, Any]]:
         """Parse USB storage via show/media (and enrich via show/usb when available)."""
         media_raw = await self._rci_get("show/media")
+        if self._is_missing_reply(media_raw):
+            self._mark_endpoint("show/media", False)
+            return []
+        self._mark_endpoint("show/media", True)
         usb_raw = None
-        try:
-            usb_raw = await self._rci_get("show/usb")
-        except Exception:
-            usb_raw = None
+        if not self._endpoint_absent("show/usb"):
+            try:
+                usb_raw = await self._rci_get("show/usb")
+                if self._is_missing_reply(usb_raw):
+                    self._mark_endpoint("show/usb", False)
+                    usb_raw = None
+                else:
+                    self._mark_endpoint("show/usb", True)
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:  # noqa: BLE001
+                if _is_endpoint_missing(err):
+                    self._mark_endpoint("show/usb", False)
+                usb_raw = None
 
         media_map: Dict[str, Dict[str, Any]] = {}
         if isinstance(media_raw, dict):
@@ -4499,7 +4886,7 @@ class KeeneticClient:
             # Step 1: Get current components from show/version
             try:
                 url = f"{base}{RCI_ROOT}/show/version"
-                async with async_timeout.timeout(self._request_timeout):
+                async with asyncio.timeout(self._request_timeout):
                     resp = await self._session.get(url, headers=node_headers)
                 if resp.status == 200:
                     version_data = await resp.json()
@@ -4523,7 +4910,7 @@ class KeeneticClient:
                         _LOGGER.info(
                             "Staging component update on node %s", label
                         )
-                        async with async_timeout.timeout(self._request_timeout):
+                        async with asyncio.timeout(self._request_timeout):
                             resp = await self._session.post(
                                 url,
                                 json=payload,
@@ -4541,7 +4928,7 @@ class KeeneticClient:
                         _LOGGER.info(
                             "Committing update on node %s", label
                         )
-                        async with async_timeout.timeout(self._request_timeout):
+                        async with asyncio.timeout(self._request_timeout):
                             resp = await self._session.post(
                                 url,
                                 json={"reason": "manual"},
@@ -4580,7 +4967,7 @@ class KeeneticClient:
             try:
                 url = f"{base}{RCI_ROOT}/system/update"
                 _LOGGER.info("Attempting update on node %s via %s", label, url)
-                async with async_timeout.timeout(self._request_timeout):
+                async with asyncio.timeout(self._request_timeout):
                     resp = await self._session.post(
                         url,
                         json={"confirm": True},

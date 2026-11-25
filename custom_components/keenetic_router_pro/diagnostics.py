@@ -92,6 +92,10 @@ TO_REDACT: set[str] = {
     "remote_endpoint",
     "remote-endpoint-address",
     "local-endpoint-address",
+    # SSTP server sessions (issue #74): the address the server gave each
+    # client; the client's "username" is covered above.
+    "client_address",
+    "clientaddress",
     "ac-mac",
     # Wi-Fi PSKs / keys
     "psk",

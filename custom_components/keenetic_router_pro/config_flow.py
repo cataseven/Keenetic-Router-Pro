@@ -35,8 +35,8 @@ _PASSWORD_SELECTOR = selector.TextSelector(
 from . import async_get_router_session
 from .api import (
     KeeneticClient,
-    KeeneticAuthError,
     KeeneticApiError,
+    KeeneticCredentialsError,
     KeeneticUnsupportedAuthError,
 )
 from .const import (
@@ -252,10 +252,12 @@ class KeeneticRouterProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 # hunting for a typo that wasn't there (issue #71).
                 _LOGGER.error("Router sign-in not supported: %s", err)
                 errors["base"] = "ndw4_unsupported"
-            except KeeneticAuthError as err:
+            except KeeneticCredentialsError as err:
                 _LOGGER.error("Authentication failed: %s", err)
                 errors["base"] = "invalid_auth"
             except KeeneticApiError as err:
+                # Includes sign-in trouble that is not a password verdict
+                # (unexpected /auth status, no challenge header).
                 _LOGGER.error("API/connection error: %s", err)
                 errors["base"] = "cannot_connect"
             except TimeoutError as err:
@@ -405,7 +407,7 @@ class KeeneticRouterProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         except KeeneticUnsupportedAuthError as err:
             _LOGGER.warning("Router sign-in not supported: %s", err)
             return "ndw4_unsupported"
-        except KeeneticAuthError as err:
+        except KeeneticCredentialsError as err:
             _LOGGER.debug("Auth test failed: %s", err)
             return "invalid_auth"
         except (KeeneticApiError, TimeoutError) as err:

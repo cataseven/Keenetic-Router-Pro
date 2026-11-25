@@ -313,3 +313,36 @@ def get_client_device_info(
         "configuration_url": f"http://{safe_ip}" if safe_ip else None,
         "connections": {("mac", mac.upper())},
     }
+
+
+_VPN_PREFIXES = {
+    "wireguard": "Wireguard",
+    "sstp": "SSTP",
+    "openvpn": "OpenVPN",
+    "ipsec": "IPsec",
+}
+
+
+def vpn_prefix(profile_type: Any) -> str:
+    """Display prefix for a VPN client type ("SSTP", "OpenVPN", ...)."""
+    kind = str(profile_type or "").lower()
+    if kind in _VPN_PREFIXES:
+        return _VPN_PREFIXES[kind]
+    return kind.capitalize() if kind else "VPN"
+
+
+def vpn_label(profiles: Dict[str, Any], iface_id: str) -> str:
+    """The tunnel's description, plus its interface id when another tunnel
+    of the same type has the same description (e.g. SSTP0 and SSTP1 both
+    left at the default "tunnel")."""
+    profile = profiles.get(iface_id) or {}
+    label = str(profile.get("label") or iface_id)
+    kind = str(profile.get("type") or "").lower()
+    clash = any(
+        other_id != iface_id
+        and isinstance(other, dict)
+        and str(other.get("label") or other_id) == label
+        and str(other.get("type") or "").lower() == kind
+        for other_id, other in profiles.items()
+    )
+    return f"{label} ({iface_id})" if clash and label != iface_id else label

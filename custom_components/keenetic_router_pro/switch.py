@@ -12,6 +12,7 @@ from .api import KeeneticApiError, KeeneticClient, describe_error
 from .const import DOMAIN, DATA_CLIENT, DATA_COORDINATOR
 from .coordinator import KeeneticCoordinator
 from .entity import ControllerEntity, CryptoMapEntity
+from .utils import vpn_prefix
 
 
 async def async_setup_entry(
@@ -300,20 +301,7 @@ class KeeneticVpnSwitch(BaseKeeneticSwitch):
         self._profile_type = str(profile.get("type") or "").lower()
         self._label = profile.get("label") or iface_id
 
-        if self._profile_type == "wireguard":
-            prefix = "Wireguard"
-        elif self._profile_type == "sstp":
-            prefix = "SSTP"
-        elif self._profile_type == "openvpn":
-            prefix = "OpenVPN"
-        elif self._profile_type == "ipsec":
-            prefix = "IPsec"
-        elif self._profile_type:
-            prefix = self._profile_type.capitalize()
-        else:
-            prefix = "VPN"
-
-        self._attr_name = f"{prefix} - {self._label}"
+        self._attr_name = f"{vpn_prefix(self._profile_type)} - {self._label}"
 
     @property
     def unique_id(self) -> str:
