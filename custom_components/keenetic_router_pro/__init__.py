@@ -8,7 +8,9 @@ import logging
 import random
 from typing import Any
 
+from aiohttp import ClientSession, DummyCookieJar
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import (
     ConfigEntryAuthFailed,
@@ -18,7 +20,7 @@ from homeassistant.exceptions import (
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .api import (
     KeeneticClient,
@@ -44,6 +46,29 @@ from .const import (
 from .coordinator import KeeneticCoordinator, KeeneticPingCoordinator
 
 _LOGGER = logging.getLogger(__name__)
+_DATA_HTTP_SESSION = f"{DOMAIN}_http_session"
+
+
+@callback
+def async_get_router_session(hass: HomeAssistant) -> ClientSession:
+    """Share a connection pool without sharing router authentication cookies."""
+    if (session := hass.data.get(_DATA_HTTP_SESSION)) is None:
+        # KeeneticClient explicitly sends the cookie from its own handshake.
+        # An automatic jar would replay it during another client's GET /auth.
+        session = async_create_clientsession(
+            hass, auto_cleanup=False, cookie_jar=DummyCookieJar()
+        )
+        hass.data[_DATA_HTTP_SESSION] = session
+
+        @callback
+        def detach_session(_event: Any) -> None:
+            hass.data.pop(_DATA_HTTP_SESSION)
+            session.detach()
+
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, detach_session)
+
+    return session
+
 
 # HA Repairs panel issue ID prefix. The entry_id is appended so each
 # misconfigured entry produces its own card, and the card disappears
@@ -175,7 +200,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     port: int = int(data.get("port", DEFAULT_PORT))
     use_ssl: bool = bool(data.get("ssl", DEFAULT_SSL))
 
-    session = async_get_clientsession(hass)
+    session = async_get_router_session(hass)
 
     client = KeeneticClient(
         host=host,
