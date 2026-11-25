@@ -52,6 +52,12 @@ from .wifi import (
     KeeneticWifi5TxSensor,
 )
 from .wireguard import KeeneticWgUptimeSensor, KeeneticWgRxSensor, KeeneticWgTxSensor
+from .vpn import (
+    KeeneticSstpServerSessionsSensor,
+    KeeneticVpnRxSensor,
+    KeeneticVpnTxSensor,
+    KeeneticVpnUptimeSensor,
+)
 from .usb import KeeneticUsbStorageSensor, KeeneticMeshUsbStorageSensor
 from .mesh import (
     KeeneticMeshSystemStateSensor,
@@ -226,6 +232,30 @@ async def async_setup_entry(
         entities.append(KeeneticWgRxSensor(coordinator, entry, name))
         entities.append(KeeneticWgTxSensor(coordinator, entry, name))
 
+    # Other VPN client types (SSTP, OpenVPN, L2TP, PPTP, ...): uptime and
+    # traffic, off by default (issue #74). WireGuard has its own above.
+    known_vpn_ids: set[str] = set()
+
+    def _vpn_sensor_set(iface_id: str, profile: dict) -> list[SensorEntity]:
+        known_vpn_ids.add(iface_id)
+        if str(profile.get("type") or "").lower() == "wireguard":
+            return []
+        return [
+            KeeneticVpnUptimeSensor(coordinator, entry, iface_id),
+            KeeneticVpnRxSensor(coordinator, entry, iface_id),
+            KeeneticVpnTxSensor(coordinator, entry, iface_id),
+        ]
+
+    for iface_id, profile in (
+        (coordinator.data.get("vpn_tunnels") or {}).get("profiles") or {}
+    ).items():
+        entities.extend(_vpn_sensor_set(iface_id, profile or {}))
+
+    # The router's own SSTP VPN server (issue #74): only when it has one.
+    sstp_server_added = coordinator.data.get("sstp_server") is not None
+    if sstp_server_added:
+        entities.append(KeeneticSstpServerSessionsSensor(coordinator, entry))
+
     # USB depolama sensörleri (ana router)
     usb_devices = coordinator.data.get("usb_storage", [])
     for usb_dev in usb_devices:
@@ -397,6 +427,15 @@ async def async_setup_entry(
                 continue
             known_cmap_names.add(cmap_name)
             new_entities.extend(_crypto_map_sensor_set(cmap_name))
+        for iface_id, profile in (
+            (coordinator.data.get("vpn_tunnels") or {}).get("profiles") or {}
+        ).items():
+            if iface_id not in known_vpn_ids:
+                new_entities.extend(_vpn_sensor_set(iface_id, profile or {}))
+        nonlocal sstp_server_added
+        if not sstp_server_added and coordinator.data.get("sstp_server") is not None:
+            sstp_server_added = True
+            new_entities.append(KeeneticSstpServerSessionsSensor(coordinator, entry))
         if new_entities:
             async_add_entities(new_entities)
 
