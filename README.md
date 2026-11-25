@@ -1,25 +1,25 @@
 # Keenetic Router Pro - Home Assistant Integration
 ![Downloads](https://img.shields.io/github/downloads/cataseven/Keenetic-Router-Pro/total?color=41BDF5&logo=home-assistant&label=Downloads&suffix=%20downloads&style=for-the-badge)
 [![hacs\_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
-[![version](https://img.shields.io/badge/version-1.3.4-blue.svg)](https://github.com/)
+[![version](https://img.shields.io/badge/version-2.0-blue.svg)](https://github.com/cataseven/Keenetic-Router-Pro/releases)
 
 <a href="https://www.buymeacoffee.com/cataseven" target="_blank">
   <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 60px !important; width: 217px !important;" >
 </a> 
 
-An advanced Home Assistant integration for Keenetic routers. Provides mesh network management, VPN control, device tracking, traffic monitoring, firmware updates, per-device bandwidth limiting, 4G/LTE data-usage tracking, and more.
+An advanced Home Assistant integration for Keenetic routers. Provides mesh network management, VPN control, device tracking, traffic monitoring, firmware updates, per-device bandwidth limiting, port forwarding control, 4G/LTE data-usage tracking, and more.
 
 ## 🌟 Features
 
 ### 📡 Real Time Device Tracking
 
-* Real-time device status via **ICMP Ping**. You don't need to wait Keenetic's update time for device tracking. This integration pings the devices you selected every 3 seconds.
-* Selectable client list
+* Real-time device status via **ICMP Ping**. You don't need to wait Keenetic's update time for device tracking. This integration pings the devices you selected every 5 seconds by default (adjustable in the options).
+* Selectable client list — trackers are enabled as soon as you add a device, and removing a device from the list also removes its Home Assistant device and entities
 * Optional update interval
 * Automatic updates on IP address changes
 * **Cross-subnet fallback** *(optional, off by default)* — for devices on isolated sub-networks (guest VLANs, IoT subnets) that Home Assistant can't ping directly, an opt-in toggle uses the router's own view of connected devices instead of ping. Flat-LAN setups see no change.
 > [!IMPORTANT]
-> ⚠️ **If Apple iOS devices are registered with client name including 'apple', 'iphone' or 'ipad' then they will NOT be pinged every 3 seconds. Instead, they will sync with the status on the Router's interface. This is because they go into Deep Sleep mode and disable WiFi connection even when they are connected to WiFi.**
+> ⚠️ **If Apple iOS devices are registered with a client name including 'apple', 'iphone' or 'ipad', their ping result is not used. Instead, they follow their status on the router's interface. This is because they go into Deep Sleep mode and stop answering pings even while they are connected to Wi-Fi.**
 
 ### 🔗 Mesh Network Management
 
@@ -43,9 +43,19 @@ An advanced Home Assistant integration for Keenetic routers. Provides mesh netwo
 ### 🔐 VPN Management
 
 * Enable/disable WireGuard profiles (switch)
-* OpenVPN, IPsec, L2TP, PPTP support
-* VPN uptime, RX/TX sensors
+* OpenVPN, IPsec, L2TP, PPTP, SSTP support
+* **Connected** binary sensor for every VPN client connection *(new)* — shows whether the tunnel is really up, not just switched on (a tunnel whose server is unreachable or whose ping-check failed shows as disconnected)
+* VPN uptime, RX/TX sensors (WireGuard; SSTP/OpenVPN/L2TP/PPTP as disabled-by-default diagnostics)
+* **SSTP server sessions** *(new)* — number of connected clients and their user names, when the router runs the SSTP VPN server
 * **IPsec site-to-site tunnels** appear as their own sub-devices with connection state, IKE phase, byte counters, and throughput
+
+### 🔀 Port Forwarding *(new)*
+
+* On/off switch for each **existing** port forwarding rule on the router
+* Switches are **disabled by default** and are configuration entities, so they are never exposed to voice assistants unless you choose to
+* Every change is verified on the router before it is saved
+* `keenetic_router_pro.list_port_forwards` action returns the current rules
+* See [Port forwarding](#-port-forwarding) below for details
 
 ### 📶 WiFi Control
 
@@ -130,6 +140,7 @@ For each tracked client, two new controls:
 * Router reboot
 * Mesh node reboot (separate for each node)
 * Clear Bandwidth Limit (per tracked client)
+* Wake-on-LAN (per tracked client)
 
 ### 🔒 Security & Privacy *(new)*
 
@@ -137,11 +148,13 @@ For each tracked client, two new controls:
 * Credentials never appear in log messages, error tracebacks, or `__repr__` output
 * **Diagnostics export** (Settings → ⋮ → Download diagnostics) automatically redacts router host, MAC addresses, IPs, SSIDs, WiFi passwords, IMSI/IMEI/ICCID, and per-client policy tables — safe to attach to GitHub issues
 * CLI arguments validated against an allowlist before reaching the router
+* **No brute-force lockouts:** if the router rejects the password, the integration stops at once and asks you to re-authenticate instead of retrying the old password on every poll
+* Port forwarding switches are disabled by default and kept away from Assist, voice/LLM assistants and HomeKit
 * A `SECURITY.md` file ships with the integration explaining the protection model
 
 ### 🔧 Reauth & Reconfigure *(new)*
 
-* **Reauth flow** — if you change the router's admin password, HA prompts you to re-enter credentials in place. No more deleting and re-adding the integration.
+* **Reauth flow** — if you change the router's admin password, HA prompts you to re-enter credentials in place. No more deleting and re-adding the integration. Until you do, the integration does not try the old password again, so the router's brute-force protection is never triggered. A router that is merely still starting up is retried automatically and does not trigger a reauth prompt.
 * **Reconfigure flow** — change router IP, port, SSL setting, or username at any time via **Settings → Devices & Services → Keenetic Router Pro → Reconfigure**. All entity history and dashboard cards stay intact.
 
 ---
@@ -247,23 +260,23 @@ Settings > Devices & Services > Add Integration > **Keenetic Router Pro**
 | Port               | Web interface port                                               | `100`         |
 | Username           | Admin username                                                   | `admin`       |
 | Password           | Admin password (masked input)                                    | `********`    |
-| Use Challenge Auth | Enable for newer models (e.g. Hero) that use NDW2 authentication | `off`         |
+| Use Challenge Auth | Enable for newer models (e.g. Hero) and KeeneticOS 5.2 (NDW2/NDW4 sign-in) | `off`         |
 
 > [!NOTE]
-> **Use Challenge Auth** is required for newer Keenetic models such as the **Hero** series that use NDW2 challenge-response authentication instead of Basic Auth. If the integration fails to connect on a newer model, try enabling this option. Older models should leave it disabled.
+> **Use Challenge Auth** is required for newer Keenetic models such as the **Hero** series and for **KeeneticOS 5.2**, which use the NDW2 / NDW4 challenge-response sign-in instead of Basic Auth. If the router refuses Basic Auth, the integration switches to the challenge sign-in on its own. Older models can leave it disabled.
 
 ### 8. Select Devices for Tracking and Other Device based managements
 
 During setup (and later via the integration's **Configure** option), you can:
 
-* Choose which devices should be monitored via ping
+* Choose which devices should be monitored via ping. Removing a device from this list later also deletes its Home Assistant device and entities.
 * Enable **Cross-subnet fallback** — turn this on if some of your tracked devices live on an isolated sub-network that Home Assistant can't ping directly (guest VLAN, IoT subnet, etc.). The integration will fall back to the router's own view of those devices' connection state. Leave off for a typical flat LAN.
 
 ### 9. Changed your router password or IP later?
 
 You don't need to remove and re-add the integration.
 
-* **Password changed:** Home Assistant will surface a reauth prompt automatically — click it, enter the new password, you're done.
+* **Password changed:** Home Assistant will surface a reauth prompt automatically — click it, enter the new password, you're done. Polling pauses until then, and the old password is not retried against the router.
 * **IP / port / SSL changed:** Open **Settings → Devices & Services → Keenetic Router Pro → Reconfigure** and update the values. Entity history, dashboard cards, and automations all stay intact.
 
 ---
@@ -309,6 +322,23 @@ You don't need to remove and re-add the integration.
 | Entity | Description |
 | ------ | ----------- |
 | Firmware Update Available | `on` when a new stable firmware is available |
+| VPN Connected (per VPN client) | `on` when the tunnel is actually connected (same rule as the router's web UI) |
+
+#### VPN sensors
+
+| Entity | Description |
+| ------ | ----------- |
+| SSTP Server Sessions | Number of clients connected to the router's SSTP VPN server; `usernames` / `clients` attributes *(only when the router runs the SSTP server)* |
+| VPN Uptime / RX / TX (per SSTP, OpenVPN, L2TP, PPTP connection) | Session uptime and traffic *(diagnostic, disabled by default)* |
+
+Example — get notified when a remote SSTP client drops (use your own entity id and user name):
+
+```yaml
+trigger:
+  - platform: template
+    value_template: >
+      {{ 'z2m' not in (state_attr('sensor.keenetic_sstp_server_sessions', 'usernames') or []) }}
+```
 
 #### Update
 
@@ -322,6 +352,7 @@ You don't need to remove and re-add the integration.
 | ------ | ----------- |
 | WiFi SSID (per network) | Enable/disable each WiFi network |
 | VPN Tunnel (per profile) | Enable/disable WireGuard, OpenVPN, IPsec, L2TP, PPTP |
+| Port forward (per rule) | Enable/disable an existing port forwarding rule *(disabled by default, configuration entity)* |
 
 #### Buttons
 
@@ -404,10 +435,11 @@ Each crypto-map appears as its own sub-device with state, IKE phase, byte counte
 
 | Entity | Description |
 | ------ | ----------- |
-| Device Tracker | ICMP ping-based presence (3 s interval) |
+| Device Tracker | ICMP ping-based presence (5 s default interval) |
 | Connection Policy | Choose access policy: Default, VPN, Deny, custom… |
 | Bandwidth Limit | Number entity (kbit/s) — speed cap |
 | Clear Bandwidth Limit | Button — one-tap removal |
+| Wake-on-LAN | Button — sends a magic packet to wake the device |
 | Connection Type | Wired / Wi-Fi |
 | Wi-Fi Band, Wi-Fi Mode | When connected via Wi-Fi |
 
@@ -453,19 +485,24 @@ Each mesh node appears as a separate device in Home Assistant.
 
 ## 🔀 Port forwarding
 
-The integration creates disabled-by-default switches for existing port forwards.
-Enable the switches you need on the Keenetic device page, then use `switch.turn_on`
-and `switch.turn_off` as usual. Changes are read back from the router before the
-configuration is saved. Rules that disappear become unavailable. The current
-implementation covers interface-based forwards to a host or address on firmware
-that exposes the rule index via `/rci/ip/static`; it excludes loopback targets,
-address-based bindings and entries without a port.
+The integration creates a switch for every existing port forwarding rule on the router. The switches only turn rules on and off; they never create, edit or delete a rule.
 
-To get a fresh snapshot, call `keenetic_router_pro.list_port_forwards`. Select
-the router's configuration entry in the action editor, or use its
-`config_entry_id` in YAML. It returns a `rules` list with `index`, `name`,
-`interface`, `protocol`, `port`, `end_port`, and `enabled`. An empty list means
-no matching rules; a read failure raises an action error instead.
+* **Disabled by default.** Turning a switch on opens a port to the internet, so enable only the ones you need: router device page → *Configuration* → *+N entities not shown*. This also keeps blanket actions such as `switch.turn_on` with `entity_id: all` away from your port forwards.
+* **Configuration entities:** Home Assistant does not expose them to Assist, voice/LLM assistants or HomeKit unless you do.
+* Turning a switch on or off changes the rule and saves the router configuration. The rule table is read back first: if the router did not apply the change, or changed a different rule, the change is undone, nothing is saved and you get an error.
+* Names show the comment, protocol, port and WAN interface, e.g. `Port forward NAS TCP 8443 (ISP)`.
+* Editing a rule in the router web UI gives it a new identity: the old switch becomes unavailable and a new (disabled) switch appears.
+* Covered: rules on a WAN interface that forward to a LAN host or address. Not shown, on purpose: rules that forward to the router itself — such as the port `100` → `79` rule from step 4 of the configuration, which this integration needs to reach the router — address-based rules and rules without a port.
+* Rules are read once a minute.
+
+The `keenetic_router_pro.list_port_forwards` action reads the rules straight from the router. Select the router's configuration entry in the action editor, or use its `config_entry_id` in YAML. It returns a `rules` list with `index`, `name`, `interface`, `protocol`, `port`, `end_port`, `to_port` and `enabled`. An empty list means there are no rules; a read failure raises an error.
+
+```yaml
+action: keenetic_router_pro.list_port_forwards
+data:
+  config_entry_id: <your router's config entry id>
+response_variable: forwards
+```
 
 ---
 
@@ -510,7 +547,7 @@ automation:
 ## 🔧 Requirements
 
 * Home Assistant 2024.1.0 or newer
-* Keenetic router (NDMS 3.x / 4.x / 5.x)
+* Keenetic router (NDMS 3.x / 4.x / KeeneticOS 5.x, including 5.2)
 * Web management interface must be enabled on the router
 
 ### Tested Models
@@ -543,8 +580,10 @@ automation:
 
 ### Entities Not Appearing
 
-1. Restart Home Assistant
-2. Remove and re-add the integration *(should rarely be needed — reconfigure flow handles most IP/port changes)*
+1. **Port forwarding switches** are disabled by default: open the router device page → *Configuration* → *+N entities not shown* and enable the ones you need. Only rules that forward a WAN port to a device on your network get a switch.
+2. **Device trackers** that older versions created as disabled are enabled automatically after updating to 2.0 (ones you disabled yourself stay disabled).
+3. Restart Home Assistant
+4. Remove and re-add the integration *(should rarely be needed — reconfigure flow handles most IP/port changes)*
 
 ### Ping Not Working
 
