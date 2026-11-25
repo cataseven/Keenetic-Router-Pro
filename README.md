@@ -451,6 +451,24 @@ Each mesh node appears as a separate device in Home Assistant.
 
 ---
 
+## 🔀 Port forwarding
+
+The integration creates disabled-by-default switches for existing port forwards.
+Enable the switches you need on the Keenetic device page, then use `switch.turn_on`
+and `switch.turn_off` as usual. Changes are read back from the router before the
+configuration is saved. Rules that disappear become unavailable. The current
+implementation covers interface-based forwards to a host or address on firmware
+that exposes the rule index via `/rci/ip/static`; it excludes loopback targets,
+address-based bindings and entries without a port.
+
+To get a fresh snapshot, call `keenetic_router_pro.list_port_forwards`. Select
+the router's configuration entry in the action editor, or use its
+`config_entry_id` in YAML. It returns a `rules` list with `index`, `name`,
+`interface`, `protocol`, `port`, `end_port`, and `enabled`. An empty list means
+no matching rules; a read failure raises an action error instead.
+
+---
+
 ## 🔔 Events
 
 ### `keenetic_router_pro_new_device`

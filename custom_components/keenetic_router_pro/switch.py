@@ -1,11 +1,12 @@
-"""Switches for Keenetic Router Pro (Wi-Fi + WireGuard on/off)."""
+"""Switches for Keenetic Router Pro (Wi-Fi + WireGuard on/off + port forwarding)."""
 from __future__ import annotations
 from typing import Any
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from .api import KeeneticClient
+from .api import KeeneticApiError, KeeneticClient
 from .const import DOMAIN, DATA_CLIENT, DATA_COORDINATOR
 from .coordinator import KeeneticCoordinator
 from .entity import ControllerEntity, CryptoMapEntity
@@ -99,6 +100,22 @@ async def async_setup_entry(
         coordinator.async_add_listener(_async_add_new_crypto_maps)
     )
 
+    known_forward_indexes: set[str] = set()
+
+    @callback
+    def _async_add_new_port_forwards() -> None:
+        new_entities = []
+        for index, rule in coordinator.data.get("port_forwards", {}).items():
+            if index in known_forward_indexes:
+                continue
+            known_forward_indexes.add(index)
+            new_entities.append(KeeneticPortForwardSwitch(coordinator, entry, client, index, rule))
+        if new_entities:
+            async_add_entities(new_entities)
+
+    _async_add_new_port_forwards()
+    entry.async_on_unload(coordinator.async_add_listener(_async_add_new_port_forwards))
+
 
 class BaseKeeneticSwitch(ControllerEntity, SwitchEntity):
     """Base switch class sharing device_info + refresh logic."""
@@ -112,6 +129,57 @@ class BaseKeeneticSwitch(ControllerEntity, SwitchEntity):
     ) -> None:
         ControllerEntity.__init__(self, coordinator, entry.entry_id, entry.title)
         self._client = client
+
+
+class KeeneticPortForwardSwitch(BaseKeeneticSwitch):
+    """Opt-in switch for an existing destination port forward."""
+
+    _attr_entity_registry_enabled_default = False
+    _attr_icon = "mdi:lan-connect"
+
+    def __init__(
+        self,
+        coordinator: KeeneticCoordinator,
+        entry: ConfigEntry,
+        client: KeeneticClient,
+        index: str,
+        rule: dict[str, Any],
+    ) -> None:
+        super().__init__(coordinator, entry, client)
+        self._index = index
+        self._attr_unique_id = f"{entry.entry_id}_port_forward_{index}"
+        ports = str(rule["port"])
+        if rule["end_port"] is not None:
+            ports += f"–{rule['end_port']}"
+        parts = ["Port forward", rule["protocol"].upper(), ports, rule["name"]]
+        self._attr_name = " ".join(part for part in parts if part)
+
+    @property
+    def _rule(self) -> dict[str, Any] | None:
+        return self.coordinator.data.get("port_forwards", {}).get(self._index)
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._rule is not None
+
+    @property
+    def is_on(self) -> bool | None:
+        rule = self._rule
+        return rule["enabled"] if rule is not None else None
+
+    async def _async_set_enabled(self, enabled: bool) -> None:
+        try:
+            await self._client.async_set_port_forward_enabled(self._index, enabled)
+        except (KeeneticApiError, TimeoutError, ValueError) as err:
+            raise HomeAssistantError(f"Could not set port forwarding state: {err}") from err
+        finally:
+            await self.coordinator.async_request_refresh()
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._async_set_enabled(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._async_set_enabled(False)
 
 
 class KeeneticWifiSwitch(BaseKeeneticSwitch):
